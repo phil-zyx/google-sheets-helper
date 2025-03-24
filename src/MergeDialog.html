@@ -500,7 +500,6 @@
               <p><strong>源表格：</strong>${state.previewData.sourceSheet}</p>
               <p><strong>目标表格：</strong>${state.previewData.targetSheet}</p>
               <p><strong>预览表格：</strong>${state.previewData.previewSheetName}</p>
-              <p><strong>新增行数：</strong>${state.previewData.changes?.newRows?.length || 0}</p>
             </div>
           `;
                 }
@@ -573,7 +572,10 @@
                         document.querySelectorAll('button').forEach(btn => btn.disabled = false);
 
                         if (result.success) {
-                            showStatus(result.message);
+                            // 构建包含新增行数的消息
+                            const newRowText = result.newRowCount !== undefined ?
+                                `\n新增行数: ${result.newRowCount}` : '';
+                            showStatus(result.message + newRowText);
                             setTimeout(closeDialog, 2000);
                         } else {
                             showStatus(result.message, true);

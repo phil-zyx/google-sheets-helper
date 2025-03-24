@@ -223,18 +223,21 @@ function mergeSheets(config, targetSheet) {
     }
 
     // 处理变更
-    // 1. 添加新行
+    // 1. 添加新行（按ID顺序插入）
     if (changes.newRows.length > 0) {
-      var lastRow = targetSheet.getLastRow();
-      var newRowsRange = targetSheet.getRange(lastRow + 1, 1, changes.newRows.length, sourceHeaders.length);
-      newRowsRange.setValues(changes.newRows);
-      newRowsRange.setBackground(MERGE_CONSTANTS.COLORS.NEW);
-      
-      // 为新行添加基准值注释
-      var newRowsNotes = changes.newRows.map(row => 
-        row.map(value => NoteManager.addSystemNote('', NOTE_CONSTANTS.TYPES.BASE_VALUE, value.toString()))
+      const insertResult = batchInsertRowsInOrder(
+        targetSheet,
+        changes.newRows,
+        targetIdColIndex,
+        {
+          newRowColor: MERGE_CONSTANTS.COLORS.NEW,
+          addBaseNotes: true
+        }
       );
-      newRowsRange.setNotes(newRowsNotes);
+      
+      if (!insertResult.success) {
+        throw new Error(`无法插入新行: ${insertResult.message}`);
+      }
     }
 
     // 2. 处理可以直接更新的行
@@ -328,7 +331,9 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
 
     // 获取预览表的数据和注释
     var previewRange = previewSheet.getDataRange();
+    var previewData = previewRange.getValues();
     var previewNotes = previewRange.getNotes();
+    var previewBackgrounds = previewRange.getBackgrounds();
     
     // 检查是否存在未解决的冲突
     var hasUnresolvedConflicts = false;
@@ -351,23 +356,92 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
       };
     }
 
-    // 获取预览表的其他数据
-    var previewData = previewRange.getValues();
-    var previewBackgrounds = previewRange.getBackgrounds();
+    // 找到ID列以识别新行
+    var idColIndex = -1;
+    var headers = previewData[0];
+    headers.forEach((header, index) => {
+      if (header.toString().endsWith(MERGE_CONSTANTS.ID_SUFFIX)) {
+        idColIndex = index;
+      }
+    });
+    
+    if (idColIndex === -1) {
+      return {
+        success: false,
+        message: `未找到ID列（以${MERGE_CONSTANTS.ID_SUFFIX}结尾的列）`
+      };
+    }
 
-    // 只复制有变化的单元格（新增、更新或解决的冲突）
+    // 获取变更行信息
+    var rowsWithChanges = [];
+    var newRowData = [];
+    
+    // 记录所有有变化的行
     for (var i = 0; i < previewData.length; i++) {
+      var hasChanges = false;
       for (var j = 0; j < previewData[i].length; j++) {
         var background = previewBackgrounds[i][j];
-        // 检查单元格是否有变化（根据背景色判断）
         if (background === MERGE_CONSTANTS.COLORS.NEW || 
             background === MERGE_CONSTANTS.COLORS.UPDATED || 
             background === MERGE_CONSTANTS.COLORS.RESOLVED) {
-          var targetCell = targetSheet.getRange(i + 1, j + 1);
-          targetCell.setValue(previewData[i][j]);
-          targetCell.setNote(previewNotes[i][j]);
-          targetCell.setBackground(MERGE_CONSTANTS.COLORS.MERGED);  // 或者完全不设置背景色
+          hasChanges = true;
         }
+      }
+      
+      if (hasChanges) {
+        if (i > 0 && previewBackgrounds[i][0] === MERGE_CONSTANTS.COLORS.NEW) {
+          // 新行，需要在目标表中插入
+          newRowData.push({
+            rowIndex: i,
+            id: previewData[i][idColIndex],
+            data: previewData[i],
+            notes: previewNotes[i]
+          });
+        } else {
+          // 更新的现有行
+          rowsWithChanges.push(i);
+        }
+      }
+    }
+    
+    // 对目标表的修改
+    
+    // 1. 先处理现有行的更新（不会改变行数）
+    for (var i = 0; i < rowsWithChanges.length; i++) {
+      var rowIndex = rowsWithChanges[i];
+      for (var j = 0; j < previewData[rowIndex].length; j++) {
+        var background = previewBackgrounds[rowIndex][j];
+        // 检查单元格是否有变化
+        if (background === MERGE_CONSTANTS.COLORS.UPDATED || 
+            background === MERGE_CONSTANTS.COLORS.RESOLVED) {
+          var targetCell = targetSheet.getRange(rowIndex + 1, j + 1);
+          targetCell.setValue(previewData[rowIndex][j]);
+          targetCell.setNote(previewNotes[rowIndex][j]);
+          targetCell.setBackground(MERGE_CONSTANTS.COLORS.MERGED);
+        }
+      }
+    }
+    
+    // 2. 获取目标表现有数据
+    var targetData = targetSheet.getDataRange().getValues();
+    
+    // 3. 处理新行插入
+    if (newRowData.length > 0) {
+      // 将newRowData格式转换为batchInsertRowsInOrder所需格式
+      const formattedNewRows = newRowData.map(row => row.data);
+      
+      const insertResult = batchInsertRowsInOrder(
+        targetSheet,
+        formattedNewRows,
+        idColIndex,
+        {
+          newRowColor: MERGE_CONSTANTS.COLORS.MERGED,
+          addBaseNotes: true
+        }
+      );
+      
+      if (!insertResult.success) {
+        throw new Error(`确认合并时无法插入新行: ${insertResult.message}`);
       }
     }
 
@@ -381,14 +455,14 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
       : `${sourceSheetName}(已合并)`;
     sourceSheet.setName(newSourceSheetName);
     
-    // 4. 删除预览表
+    // 删除预览表
     ss.deleteSheet(previewSheet);
     
-    // 5. 清除预览状态
+    // 清除预览状态
     const cache = CacheService.getScriptCache();
     cache.remove('merge_preview_state');
     
-    // 6. 激活目标页签
+    // 激活目标页签
     targetSheet.activate();
     
     // 记录确认合并成功的日志
@@ -401,7 +475,8 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
     
     return {
       success: true,
-      message: "合并完成！只更新了变更的单元格。源表已标记为已合并状态。"
+      message: "合并完成！只更新了变更的单元格。源表已标记为已合并状态。",
+      newRowCount: newRowData.length
     };
     
   } catch (error) {
@@ -694,4 +769,211 @@ function showMergeDialog() {
     .setWidth(500)
     .setHeight(500);
   SpreadsheetApp.getUi().showModalDialog(html, '表格合并工具');
+}
+
+// 用于比较ID的辅助函数
+function compareIds(idA, idB) {
+  // 尝试将ID解析为数字进行比较
+  const numA = parseFloat(idA);
+  const numB = parseFloat(idB);
+  
+  // 如果都是有效数字，按数字大小排序
+  if (!isNaN(numA) && !isNaN(numB)) {
+    return numA - numB;
+  }
+  
+  // 否则按字符串排序
+  return idA.localeCompare(idB);
+}
+
+/**
+ * 优化的ID排序和行插入函数 - 在预览和确认合并时共用
+ * @param {Sheet} sheet 目标表格
+ * @param {Array} newRows 要插入的新行
+ * @param {number} idColIndex ID列索引
+ * @param {Object} options 可选配置项
+ * @returns {Object} 处理结果
+ */
+function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
+  if (newRows.length === 0) return { success: true, message: "没有新行需要插入" };
+  
+  try {
+    const defaults = {
+      preserveFormatting: true,    // 是否保留现有格式
+      newRowColor: MERGE_CONSTANTS.COLORS.NEW,  // 新行的背景色
+      addBaseNotes: true,          // 是否添加基准值注释
+      batchSize: 1000              // 批量处理的最大行数
+    };
+    
+    const config = { ...defaults, ...options };
+    
+    // 获取当前表所有数据、注释和格式
+    const currentData = sheet.getDataRange().getValues();
+    const currentNotes = config.addBaseNotes ? sheet.getDataRange().getNotes() : null;
+    const currentBackgrounds = config.preserveFormatting ? sheet.getDataRange().getBackgrounds() : null;
+    
+    const headerRow = currentData[0];
+    const dataRows = currentData.slice(1); // 不包括表头
+    
+    // 计算所需的列数(取最大值)
+    const maxColumns = Math.max(
+      headerRow.length,
+      ...newRows.map(row => row.length)
+    );
+    
+    // 提取所有已有ID
+    const existingIds = new Map();
+    dataRows.forEach((row, idx) => {
+      const id = row[idColIndex]?.toString();
+      if (id) {
+        existingIds.set(id, {
+          data: row,
+          index: idx + 1, // 实际行号(从1开始)，不包括表头
+          notes: config.addBaseNotes ? currentNotes[idx + 1] : null,
+          background: config.preserveFormatting ? currentBackgrounds[idx + 1] : null
+        });
+      }
+    });
+    
+    // 准备新行数据和ID
+    const newRowsMap = new Map();
+    newRows.forEach((row, idx) => {
+      const id = row[idColIndex]?.toString();
+      if (id) {
+        // 确保行长度一致
+        const paddedRow = [...row];
+        while (paddedRow.length < maxColumns) {
+          paddedRow.push('');
+        }
+        
+        newRowsMap.set(id, {
+          data: paddedRow,
+          originalIndex: idx
+        });
+      }
+    });
+    
+    // 合并所有唯一ID并排序
+    const allIds = [...new Set([...existingIds.keys(), ...newRowsMap.keys()])];
+    allIds.sort(compareIds);
+    
+    // 创建完整的排序数据集
+    const sortedData = [headerRow]; // 先放入表头
+    const sortedNotes = config.addBaseNotes ? [currentNotes[0]] : null; 
+    const sortedBackgrounds = config.preserveFormatting ? [currentBackgrounds[0]] : null;
+    const newRowIndices = [];
+    
+    allIds.forEach((id, idx) => {
+      const rowIndex = idx + 1; // 实际行索引（从0开始，不包括表头）
+      
+      if (newRowsMap.has(id)) {
+        // 这是一个新行
+        const newRow = newRowsMap.get(id);
+        sortedData.push(newRow.data);
+        newRowIndices.push(rowIndex + 1); // +1 是因为包括表头
+        
+        if (config.addBaseNotes) {
+          // 为新行创建基准值注释
+          const rowNotes = newRow.data.map(value => 
+            NoteManager.addSystemNote('', NOTE_CONSTANTS.TYPES.BASE_VALUE, 
+              value !== null && value !== undefined ? value.toString() : '')
+          );
+          sortedNotes.push(rowNotes);
+        }
+        
+        if (config.preserveFormatting) {
+          // 为新行准备背景色
+          const rowBackground = Array(maxColumns).fill(config.newRowColor);
+          sortedBackgrounds.push(rowBackground);
+        }
+      } else if (existingIds.has(id)) {
+        // 这是现有行
+        const existingRow = existingIds.get(id);
+        
+        // 确保行长度一致
+        const paddedRow = [...existingRow.data];
+        while (paddedRow.length < maxColumns) {
+          paddedRow.push('');
+        }
+        sortedData.push(paddedRow);
+        
+        if (config.addBaseNotes) {
+          sortedNotes.push(existingRow.notes);
+        }
+        
+        if (config.preserveFormatting) {
+          sortedBackgrounds.push(existingRow.background);
+        }
+      }
+    });
+    
+    // 清除并批量写入数据
+    if (sortedData.length > config.batchSize) {
+      // 对于大数据集，分批处理
+      const batchCount = Math.ceil(sortedData.length / config.batchSize);
+      
+      // 先调整表格大小以适应所有数据
+      sheet.clear();
+      if (sheet.getMaxRows() < sortedData.length) {
+        sheet.insertRows(1, sortedData.length - sheet.getMaxRows());
+      }
+      if (sheet.getMaxColumns() < maxColumns) {
+        sheet.insertColumns(1, maxColumns - sheet.getMaxColumns());
+      }
+      
+      // 分批写入数据
+      for (let i = 0; i < batchCount; i++) {
+        const startRow = i * config.batchSize + 1;
+        const batchRowCount = Math.min(config.batchSize, sortedData.length - i * config.batchSize);
+        
+        if (batchRowCount <= 0) break;
+        
+        const batchData = sortedData.slice(startRow - 1, startRow - 1 + batchRowCount);
+        sheet.getRange(startRow, 1, batchRowCount, maxColumns).setValues(batchData);
+        
+        if (config.addBaseNotes) {
+          const batchNotes = sortedNotes.slice(startRow - 1, startRow - 1 + batchRowCount);
+          sheet.getRange(startRow, 1, batchRowCount, maxColumns).setNotes(batchNotes);
+        }
+        
+        if (config.preserveFormatting) {
+          const batchBackgrounds = sortedBackgrounds.slice(startRow - 1, startRow - 1 + batchRowCount);
+          sheet.getRange(startRow, 1, batchRowCount, maxColumns).setBackgrounds(batchBackgrounds);
+        }
+      }
+    } else {
+      // 对于小数据集，一次性处理
+      sheet.clear();
+      if (sheet.getMaxRows() < sortedData.length) {
+        sheet.insertRows(1, sortedData.length - sheet.getMaxRows());
+      }
+      if (sheet.getMaxColumns() < maxColumns) {
+        sheet.insertColumns(1, maxColumns - sheet.getMaxColumns());
+      }
+      
+      sheet.getRange(1, 1, sortedData.length, maxColumns).setValues(sortedData);
+      
+      if (config.addBaseNotes) {
+        sheet.getRange(1, 1, sortedData.length, maxColumns).setNotes(sortedNotes);
+      }
+      
+      if (config.preserveFormatting) {
+        sheet.getRange(1, 1, sortedData.length, maxColumns).setBackgrounds(sortedBackgrounds);
+      }
+    }
+    
+    return {
+      success: true,
+      message: `成功按ID顺序插入了 ${newRowIndices.length} 行`,
+      newRowCount: newRowIndices.length,
+      sortedData: sortedData,
+      newRowIndices: newRowIndices
+    };
+  } catch (error) {
+    console.error('批量插入行失败:', error);
+    return {
+      success: false,
+      message: `批量插入行失败: ${error.toString()}`
+    };
+  }
 }
