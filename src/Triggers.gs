@@ -195,10 +195,14 @@ function clearAllMarks(showConfirm = true) {
       range.getNotes(),
       range.getValues()
     ];
+    
+    // 添加保存水平对齐方式
+    const horizontalAlignments = range.getHorizontalAlignments();
 
     const newBackgrounds = [];
     const newNotes = [];
     const newValues = [];
+    const newHorizontalAlignments = []; // 添加新的对齐方式数组
     const rowsToKeep = [];
 
     // 检查每一行，标记需要保留的行
@@ -234,10 +238,12 @@ function clearAllMarks(showConfirm = true) {
 
         const backgroundRow = [];
         const noteRow = [];
+        const alignmentRow = []; // 添加对齐方式行
 
         for (let j = 0; j < backgrounds[i].length; j++) {
           const currentBg = backgrounds[i][j];
           let currentNote = notes[i][j];
+          const currentAlignment = horizontalAlignments[i][j]; // 获取当前对齐方式
 
           // 清除所有比较标记的背景色
           if (currentBg === COMPARE_CONSTANTS.COLORS.MODIFIED || 
@@ -263,11 +269,15 @@ function clearAllMarks(showConfirm = true) {
           } else {
             noteRow.push('');
           }
+          
+          // 保存对齐方式
+          alignmentRow.push(currentAlignment);
         }
 
         newBackgrounds.push(backgroundRow);
         newNotes.push(noteRow);
         newValues.push(values[i]);
+        newHorizontalAlignments.push(alignmentRow); // 添加对齐方式行到新数组
       }
     }
 
@@ -278,6 +288,7 @@ function clearAllMarks(showConfirm = true) {
       newRange.setBackgrounds(newBackgrounds);
       newRange.setNotes(newNotes);
       newRange.setValues(newValues);
+      newRange.setHorizontalAlignments(newHorizontalAlignments); // 设置水平对齐方式
 
       if (backgrounds.length > newBackgrounds.length) {
         sheet.deleteRows(newBackgrounds.length + 1, backgrounds.length - newBackgrounds.length);
@@ -286,6 +297,7 @@ function clearAllMarks(showConfirm = true) {
       // 如果没有行被删除，只更新背景色和注释
       range.setBackgrounds(newBackgrounds);
       range.setNotes(newNotes);
+      range.setHorizontalAlignments(newHorizontalAlignments); // 设置水平对齐方式
     }
 
     return {

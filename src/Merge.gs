@@ -166,34 +166,16 @@ function mergeSheets(config, targetSheet) {
           // 当前表中标记的 base
           var sourceBaseValue = sourceBaseData[i][sourceIndex];
           
-          // 标准化值
-          function normalizeValue(value) {
-            if (value === null || value === undefined) return '';
-            
-            // 如果是数字或者可以转换为数字
-            const num = Number(value);
-            if (!isNaN(num)) {
-              // 对于整数，返回整数字符串
-              if (Number.isInteger(num)) {
-                return String(num);
-              }
-              // 对于小数，统一格式化（去除末尾的0）
-              return String(parseFloat(num.toFixed(10)));
-            }
-            
-            // 非数字类型，转换为字符串
-            return String(value);
-          }
-          
           // 检查源表和目标表是否都进行了修改
           var sourceModified = sourceBaseValue && normalizeValue(sourceValue) !== normalizeValue(sourceBaseValue);
           if (sourceModified && normalizeValue(sourceBaseValue) !== normalizeValue(currentValue) && normalizeValue(sourceValue) !== normalizeValue(currentValue) ) {
             hasConflict = true;
+            Logger.log('the value %s %s %s ', normalizeValue(sourceValue), normalizeValue(currentValue), normalizeValue(sourceBaseValue))
             conflictColumns.push({
               header: header,
-              sourceValue: sourceValue,
-              targetValue: currentValue,
-              sourceBaseValue: sourceBaseValue,
+              sourceValue: normalizeValue(sourceValue),
+              targetValue: normalizeValue(currentValue),
+              sourceBaseValue: normalizeValue(sourceBaseValue),
             });
           } else if (sourceModified) {
             updateColumns.push({
@@ -238,6 +220,36 @@ function mergeSheets(config, targetSheet) {
       if (!insertResult.success) {
         throw new Error(`无法插入新行: ${insertResult.message}`);
       }
+      
+      // 插入新行后，重新获取目标表数据和ID映射
+      // 因为排序可能改变了行的顺序
+      var updatedTargetData = targetSheet.getDataRange().getValues();
+      var updatedTargetMap = new Map();
+      
+      for (var i = 1; i < updatedTargetData.length; i++) {
+        var id = updatedTargetData[i][targetIdColIndex];
+        if (id) {
+          updatedTargetMap.set(id.toString(), {
+            rowIndex: i,
+            data: updatedTargetData[i]
+          });
+        }
+      }
+      
+      // 更新changes中的targetRowIndex
+      changes.updates.forEach(update => {
+        const mappedRow = updatedTargetMap.get(update.id);
+        if (mappedRow) {
+          update.targetRowIndex = mappedRow.rowIndex;
+        }
+      });
+      
+      changes.conflicts.forEach(conflict => {
+        const mappedRow = updatedTargetMap.get(conflict.id);
+        if (mappedRow) {
+          conflict.targetRowIndex = mappedRow.rowIndex;
+        }
+      });
     }
 
     // 2. 处理可以直接更新的行
@@ -248,12 +260,12 @@ function mergeSheets(config, targetSheet) {
         range.setValue(col.sourceValue);
         range.setBackground(MERGE_CONSTANTS.COLORS.UPDATED);
         
-        // 更新基准值注释
+        // 更新基准值注释 - 使用保留格式的方法
         const currentNote = range.getNote();
         const newNote = NoteManager.addSystemNote(
           NoteManager.removeSystemNote(currentNote, NOTE_CONSTANTS.TYPES.BASE_VALUE),
           NOTE_CONSTANTS.TYPES.BASE_VALUE,
-          col.sourceValue.toString()
+          normalizeValue(col.sourceValue) // 使用新函数
         );
         range.setNote(newNote);
       });
@@ -266,7 +278,11 @@ function mergeSheets(config, targetSheet) {
         var range = targetSheet.getRange(conflict.targetRowIndex + 1, targetIndex + 1);
         range.setBackground(MERGE_CONSTANTS.COLORS.CONFLICT);
         
-        const conflictInfo = `${config.targetSheet}: ${col.targetValue}\n${config.sourceSheet}: ${col.sourceValue}`;
+        Logger.log('targetValue %s', col.targetValue)
+        const targetValueFormatted = normalizeValue(col.targetValue);
+        const sourceValueFormatted = normalizeValue(col.sourceValue);
+        
+        const conflictInfo = `${config.targetSheet}: ${targetValueFormatted}\n${config.sourceSheet}: ${sourceValueFormatted}`;
         const currentNote = range.getNote();
         const newNote = NoteManager.addSystemNote(
           NoteManager.removeSystemNote(currentNote, NOTE_CONSTANTS.TYPES.CONFLICT),
@@ -405,27 +421,9 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
     }
     
     // 对目标表的修改
-    
-    // 1. 先处理现有行的更新（不会改变行数）
-    for (var i = 0; i < rowsWithChanges.length; i++) {
-      var rowIndex = rowsWithChanges[i];
-      for (var j = 0; j < previewData[rowIndex].length; j++) {
-        var background = previewBackgrounds[rowIndex][j];
-        // 检查单元格是否有变化
-        if (background === MERGE_CONSTANTS.COLORS.UPDATED || 
-            background === MERGE_CONSTANTS.COLORS.RESOLVED) {
-          var targetCell = targetSheet.getRange(rowIndex + 1, j + 1);
-          targetCell.setValue(previewData[rowIndex][j]);
-          targetCell.setNote(previewNotes[rowIndex][j]);
-          targetCell.setBackground(MERGE_CONSTANTS.COLORS.MERGED);
-        }
-      }
-    }
-    
-    // 2. 获取目标表现有数据
-    var targetData = targetSheet.getDataRange().getValues();
-    
-    // 3. 处理新行插入
+    Logger.log('current changes %s', rowsWithChanges)
+
+    // 1. 先处理新行插入（会改变行数和可能改变行的顺序）
     if (newRowData.length > 0) {
       // 将newRowData格式转换为batchInsertRowsInOrder所需格式
       const formattedNewRows = newRowData.map(row => row.data);
@@ -442,6 +440,75 @@ function confirmMergeFromPreview(sourceSheetName, targetSheetName, previewSheetN
       
       if (!insertResult.success) {
         throw new Error(`确认合并时无法插入新行: ${insertResult.message}`);
+      }
+      
+      // 插入后重新获取目标表和预览表的行映射关系
+      // 这步非常重要，因为行的顺序可能已经改变
+      var targetData = targetSheet.getDataRange().getValues();
+      var targetIdMap = new Map();
+      
+      // 建立ID到行索引的映射
+      for (var i = 1; i < targetData.length; i++) {
+        var id = targetData[i][idColIndex];
+        if (id) {
+          targetIdMap.set(id.toString(), i);
+        }
+      }
+      
+      // 更新rowsWithChanges中的行索引，使其与目标表一致
+      var updatedRowsWithChanges = [];
+      for (var i = 0; i < rowsWithChanges.length; i++) {
+        var rowIndex = rowsWithChanges[i];
+        if (rowIndex > 0) { // 跳过表头
+          var id = previewData[rowIndex][idColIndex];
+          if (id) {
+            var targetRowIndex = targetIdMap.get(id.toString());
+            if (targetRowIndex !== undefined) {
+              updatedRowsWithChanges.push({
+                previewIndex: rowIndex,
+                targetIndex: targetRowIndex
+              });
+            }
+          }
+        }
+      }
+      
+      // 2. 然后处理现有行的更新（使用更新后的行索引）
+      for (var i = 0; i < updatedRowsWithChanges.length; i++) {
+        var indices = updatedRowsWithChanges[i];
+        var previewRowIndex = indices.previewIndex;
+        var targetRowIndex = indices.targetIndex;
+        
+        for (var j = 0; j < previewData[previewRowIndex].length; j++) {
+          var background = previewBackgrounds[previewRowIndex][j];
+          // 检查单元格是否有变化
+          if (background === MERGE_CONSTANTS.COLORS.UPDATED || 
+              background === MERGE_CONSTANTS.COLORS.RESOLVED ||
+              background === MERGE_CONSTANTS.COLORS.NEW) {
+            var targetCell = targetSheet.getRange(targetRowIndex + 1, j + 1);
+            targetCell.setValue(previewData[previewRowIndex][j]);
+            targetCell.setNote(previewNotes[previewRowIndex][j]);
+            targetCell.setBackground(MERGE_CONSTANTS.COLORS.MERGED);
+          }
+        }
+      }
+    } else {
+      // 如果没有新行，可以直接处理更新（不需要重新映射）
+      // 处理现有行的更新
+      for (var i = 0; i < rowsWithChanges.length; i++) {
+        var rowIndex = rowsWithChanges[i];
+        for (var j = 0; j < previewData[rowIndex].length; j++) {
+          var background = previewBackgrounds[rowIndex][j];
+          // 检查单元格是否有变化
+          if (background === MERGE_CONSTANTS.COLORS.UPDATED || 
+              background === MERGE_CONSTANTS.COLORS.RESOLVED ||
+              background === MERGE_CONSTANTS.COLORS.NEW) {
+            var targetCell = targetSheet.getRange(rowIndex + 1, j + 1);
+            targetCell.setValue(previewData[rowIndex][j]);
+            targetCell.setNote(previewNotes[rowIndex][j]);
+            targetCell.setBackground(MERGE_CONSTANTS.COLORS.MERGED);
+          }
+        }
       }
     }
 
@@ -607,6 +674,7 @@ function previewMerge(config) {
     var targetData = targetRange.getValues();
     
     // 只复制数据，不复制格式和注释
+    previewSheet.getRange(1, 1, targetData.length, targetData[0].length).setNumberFormat("@")
     previewSheet.getRange(1, 1, targetData.length, targetData[0].length)
       .setValues(targetData);
 
@@ -693,7 +761,7 @@ function resolveConflict(config) {
     newNote = NoteManager.addSystemNote(
       newNote,
       NOTE_CONSTANTS.TYPES.BASE_VALUE,
-      config.value.toString()
+      normalizeValue(config.value) // 使用新函数
     );
     cell.setNote(newNote);
 
@@ -821,13 +889,14 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
       ...newRows.map(row => row.length)
     );
     
-    // 提取所有已有ID
+    // 提取所有已有ID和对应整行数据
     const existingIds = new Map();
     dataRows.forEach((row, idx) => {
       const id = row[idColIndex]?.toString();
       if (id) {
+        // 确保存储完整行数据
         existingIds.set(id, {
-          data: row,
+          data: [...row], // 复制整行数据
           index: idx + 1, // 实际行号(从1开始)，不包括表头
           notes: config.addBaseNotes ? currentNotes[idx + 1] : null,
           background: config.preserveFormatting ? currentBackgrounds[idx + 1] : null
@@ -840,14 +909,30 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
     newRows.forEach((row, idx) => {
       const id = row[idColIndex]?.toString();
       if (id) {
-        // 确保行长度一致
-        const paddedRow = [...row];
+        // 确保行长度一致并按需格式化每个值
+        const paddedRow = [];
+        for (let i = 0; i < row.length; i++) {
+          // 检查对应的列名是否有特定前缀
+          const columnHeader = i < headerRow.length ? headerRow[i] : '';
+          
+          // 如果列名以A_BOL_开头且值是布尔类型，则应用格式化
+          if (columnHeader && columnHeader.toString().startsWith('A_BOL_')) {
+            // 对布尔值应用normalizeValue
+            Logger.log('bol init %s', row[i])
+            paddedRow.push(normalizeValue(row[i]));
+          } else {
+            // 其他值保持原样
+            paddedRow.push(row[i]);
+          }
+        }
+        
+        // 填充剩余列
         while (paddedRow.length < maxColumns) {
           paddedRow.push('');
         }
         
         newRowsMap.set(id, {
-          data: paddedRow,
+          data: paddedRow, // 存储处理后的完整行数据
           originalIndex: idx
         });
       }
@@ -867,17 +952,29 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
       const rowIndex = idx + 1; // 实际行索引（从0开始，不包括表头）
       
       if (newRowsMap.has(id)) {
-        // 这是一个新行
+        // 这是一个新行 - 保持整行数据关联
         const newRow = newRowsMap.get(id);
-        sortedData.push(newRow.data);
+        sortedData.push(newRow.data); // 插入完整行数据
         newRowIndices.push(rowIndex + 1); // +1 是因为包括表头
         
         if (config.addBaseNotes) {
           // 为新行创建基准值注释
-          const rowNotes = newRow.data.map(value => 
-            NoteManager.addSystemNote('', NOTE_CONSTANTS.TYPES.BASE_VALUE, 
-              value !== null && value !== undefined ? value.toString() : '')
-          );
+          const rowNotes = [];
+          for (let i = 0; i < newRow.data.length; i++) {
+            const value = newRow.data[i];
+            const columnHeader = i < headerRow.length ? headerRow[i] : '';
+            
+            let noteValue = value;
+            // 如果列名以A_BOL_开头且值是布尔类型，则应用格式化
+            if (columnHeader && columnHeader.toString().startsWith('A_BOL_') && 
+                (typeof value === 'boolean' || 
+                 (typeof value === 'string' && (value.toUpperCase() === 'TRUE' || value.toUpperCase() === 'FALSE')))) {
+              noteValue = normalizeValue(value);
+            }
+            
+            rowNotes.push(NoteManager.addSystemNote('', NOTE_CONSTANTS.TYPES.BASE_VALUE, 
+              noteValue !== null && noteValue !== undefined ? String(noteValue) : ''));
+          }
           sortedNotes.push(rowNotes);
         }
         
@@ -887,11 +984,28 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
           sortedBackgrounds.push(rowBackground);
         }
       } else if (existingIds.has(id)) {
-        // 这是现有行
+        // 这是现有行 - 同样保持整行数据关联
         const existingRow = existingIds.get(id);
         
-        // 确保行长度一致
-        const paddedRow = [...existingRow.data];
+        // 确保行长度一致并按需格式化值
+        const paddedRow = [];
+        for (let i = 0; i < existingRow.data.length; i++) {
+          // 检查对应的列名是否有特定前缀
+          const columnHeader = i < headerRow.length ? headerRow[i] : '';
+          
+          // 如果列名以A_BOL_开头且值是布尔类型，则应用格式化
+          if (columnHeader && columnHeader.toString().startsWith('A_BOL_') && 
+              (typeof existingRow.data[i] === 'boolean' || 
+               (typeof existingRow.data[i] === 'string' && (existingRow.data[i].toUpperCase() === 'TRUE' || existingRow.data[i].toUpperCase() === 'FALSE')))) {
+            // 对布尔值应用normalizeValue
+            paddedRow.push(normalizeValue(existingRow.data[i]));
+          } else {
+            // 其他值保持原样
+            paddedRow.push(existingRow.data[i]);
+          }
+        }
+        
+        // 填充剩余列
         while (paddedRow.length < maxColumns) {
           paddedRow.push('');
         }
@@ -951,6 +1065,7 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
         sheet.insertColumns(1, maxColumns - sheet.getMaxColumns());
       }
       
+      sheet.getRange(1, 1, sortedData.length, maxColumns).setNumberFormat("@");
       sheet.getRange(1, 1, sortedData.length, maxColumns).setValues(sortedData);
       
       if (config.addBaseNotes) {
@@ -976,4 +1091,26 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
       message: `批量插入行失败: ${error.toString()}`
     };
   }
+}
+
+// 标准化值 - 只对数字进行标准化，保留其他类型的原始格式
+function normalizeValue(value) {
+  if (value === null || value === undefined) return '';
+  
+  // 将所有值转换为字符串并去除空格
+  const strValue = String(value).trim();
+  
+  // 只对纯数字进行标准化处理
+  const num = Number(value);
+  if (!isNaN(num) && /^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$/.test(strValue)) {
+    // 对于整数，返回整数字符串
+    if (Number.isInteger(num)) {
+      return String(num);
+    }
+    // 对于小数，统一格式化（去除末尾的0）
+    return String(parseFloat(num.toFixed(10)));
+  }
+  
+  // 对于所有其他类型（包括布尔值），保留原始值的字符串表示
+  return strValue;
 }
