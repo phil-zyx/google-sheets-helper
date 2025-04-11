@@ -78,14 +78,18 @@ function createEditTrigger(showToast = true) {
 /**
  * 打开文档时的触发器
  */
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('配置表工具')
-    .addItem('新建页签', 'createNewSheetTab')
-    .addItem('比较差异', 'showCompareDialog')
-    .addItem('合并表格', 'showMergeDialog')
-    .addItem('清除所有标记', 'clearAllMarks')
-    .addToUi();
+function onOpen(e) {
+  try {
+    SpreadsheetApp.getUi()
+      .createAddonMenu()
+      .addItem('新建页签', 'createNewSheetTab')
+      .addItem('比较差异', 'showCompareDialog')
+      .addItem('合并表格', 'showMergeDialog')
+      .addItem('清除所有标记', 'clearAllMarks')
+      .addToUi();
+  } catch (error) {
+    console.error('Error creating menu: ' + error.toString());
+  }
 }
 
 /**
@@ -311,4 +315,146 @@ function clearAllMarks(showConfirm = true) {
       message: "清除失败: " + error.toString()
     };
   }
+}
+
+/**
+ * Shows the add-on's homepage card when opened from the add-on menu
+ * @param {Object} e The event object
+ * @return {CardService.Card} The homepage card
+ */
+function onHomepage(e) {
+  // 创建卡片UI
+  const card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader()
+      .setTitle('Google Sheets Helper')
+      .setImageUrl('https://writesome.oss-cn-chengdu.aliyuncs.com/logo.jpeg'))
+    .addSection(CardService.newCardSection()
+      .addWidget(CardService.newTextParagraph()
+        .setText('选择以下操作:'))
+      .addWidget(CardService.newButtonSet()
+        .addButton(CardService.newTextButton()
+          .setText('新建页签')
+          .setOnClickAction(CardService.newAction().setFunctionName('cardCreateNewSheetTab')))
+        .addButton(CardService.newTextButton()
+          .setText('比较差异')
+          .setOnClickAction(CardService.newAction().setFunctionName('cardShowCompareDialog')))
+        .addButton(CardService.newTextButton()
+          .setText('合并表格')
+          .setOnClickAction(CardService.newAction().setFunctionName('cardShowMergeDialog')))
+        .addButton(CardService.newTextButton()
+          .setText('清除所有标记')
+          .setOnClickAction(CardService.newAction().setFunctionName('cardClearAllMarks')))))
+    .build();
+  
+  return card;
+}
+
+/**
+ * 从卡片UI调用新建页签功能
+ */
+function cardCreateNewSheetTab(e) {
+  // 将卡片UI操作转换为传统UI操作
+  try {
+    createNewSheetTab();
+    return createSuccessCard('新建页签操作已启动');
+  } catch (error) {
+    return createErrorCard('新建页签失败: ' + error.toString());
+  }
+}
+
+/**
+ * 从卡片UI调用比较差异功能
+ */
+function cardShowCompareDialog(e) {
+  try {
+    showCompareDialog();
+    return createSuccessCard('比较差异对话框已打开');
+  } catch (error) {
+    return createErrorCard('打开比较差异对话框失败: ' + error.toString());
+  }
+}
+
+/**
+ * 从卡片UI调用合并表格功能
+ */
+function cardShowMergeDialog(e) {
+  try {
+    showMergeDialog();
+    return createSuccessCard('合并表格对话框已打开');
+  } catch (error) {
+    return createErrorCard('打开合并表格对话框失败: ' + error.toString());
+  }
+}
+
+/**
+ * 从卡片UI调用清除标记功能
+ */
+function cardClearAllMarks(e) {
+  try {
+    const result = clearAllMarks(false);
+    if (result.success) {
+      return createSuccessCard(result.message);
+    } else {
+      return createErrorCard(result.message);
+    }
+  } catch (error) {
+    return createErrorCard('清除标记失败: ' + error.toString());
+  }
+}
+
+/**
+ * 创建成功提示卡片
+ */
+function createSuccessCard(message) {
+  return CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle('操作成功'))
+    .addSection(CardService.newCardSection()
+      .addWidget(CardService.newTextParagraph().setText(message))
+      .addWidget(CardService.newButtonSet()
+        .addButton(CardService.newTextButton()
+          .setText('返回主页')
+          .setOnClickAction(CardService.newAction().setFunctionName('onHomepage')))))
+    .build();
+}
+
+/**
+ * 创建错误提示卡片
+ */
+function createErrorCard(message) {
+  return CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle('操作失败'))
+    .addSection(CardService.newCardSection()
+      .addWidget(CardService.newTextParagraph().setText(message))
+      .addWidget(CardService.newButtonSet()
+        .addButton(CardService.newTextButton()
+          .setText('返回主页')
+          .setOnClickAction(CardService.newAction().setFunctionName('onHomepage')))))
+    .build();
+}
+
+/**
+ * 当获得文件权限时触发
+ * @param {Object} e 事件对象
+ * @return {CardService.Card} 主页卡片
+ */
+function onFileScopeGranted(e) {
+  return onHomepage(e);
+}
+
+function testMenuCreation() {
+  try {
+    const ui = SpreadsheetApp.getUi();
+    ui.createMenu("测试菜单")
+      .addItem('测试项', 'showAlert')
+      .addToUi();
+    
+    // 创建一个简单的提示框，确认函数运行
+    SpreadsheetApp.getActive().toast('菜单创建测试成功', '测试', 3);
+  } catch (error) {
+    console.error('菜单创建测试失败:', error);
+  }
+}
+
+function showAlert() {
+  SpreadsheetApp.getUi().alert('测试成功!');
 }

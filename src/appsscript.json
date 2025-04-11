@@ -5,8 +5,11 @@
     "runtimeVersion": "V8",
     "oauthScopes": [
         "https://www.googleapis.com/auth/script.scriptapp",
-        "https://www.googleapis.com/auth/spreadsheets.currentonly",
-        "https://www.googleapis.com/auth/script.container.ui"
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/script.container.ui",
+        "https://www.googleapis.com/auth/script.triggers",
+        "https://www.googleapis.com/auth/script.external_request",
+        "https://www.googleapis.com/auth/userinfo.email"
     ],
     "addOns": {
         "common": {
@@ -14,8 +17,23 @@
             "logoUrl": "https://writesome.oss-cn-chengdu.aliyuncs.com/logo.jpeg",
             "openLinkUrlPrefixes": [
                 "https://www.github.com/"
-            ]
+            ],
+            "universalActions": [{
+                "label": "Google Sheets Helper",
+                "runFunction": "onHomepage"
+            }]
         },
-        "sheets": {}
-    }
+        "sheets": {
+            "homepageTrigger": {
+                "runFunction": "onHomepage"
+            },
+            "onFileScopeGrantedTrigger": {
+                "runFunction": "onFileScopeGranted"
+            }
+        }
+    },
+    "urlFetchWhitelist": [
+        "https://writesome.oss-cn-chengdu.aliyuncs.com/",
+        "https://www.github.com/"
+    ]
 }
