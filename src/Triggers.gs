@@ -86,6 +86,7 @@ function onOpen(e) {
       .addItem('比较差异', 'showCompareDialog')
       .addItem('合并表格', 'showMergeDialog')
       .addItem('清除所有标记', 'clearAllMarks')
+      .addItem('刷新触发器', 'createEditTrigger')
       .addToUi();
   } catch (error) {
     console.error('Error creating menu: ' + error.toString());
@@ -118,10 +119,7 @@ function onEdit(e) {
     let note = range.getNote();
     
     // 如果当前单元格已经是新增状态（绿色），则不做任何改变
-    if (currentBg === SHEET_CONSTANTS.COLORS.ADDED) {
-      return;
-    }
-
+    if (currentBg !== SHEET_CONSTANTS.COLORS.ADDED) {
     // 检查是否已经有修改记录（通过背景色判断）
     const isAlreadyModified = currentBg === SHEET_CONSTANTS.COLORS.MODIFIED;
 
@@ -150,22 +148,32 @@ function onEdit(e) {
       // 如果是新增值，设置为新增颜色（淡绿色）
       range.setBackground(SHEET_CONSTANTS.COLORS.ADDED);
     }
+    }
 
     // 2. 处理ID检查 - 无论是否有oldValue都需要检查
-    const column = range.getColumn();
-    const headerRange = sheet.getRange(1, column);
-    const headerValue = headerRange.getValue();
+    // 查找所有ID列
+    const idColumns = [];
+    for (let col = 1; col <= headerRow.length; col++) {
+      const header = headerRow[col-1];
+      if (header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
+        idColumns.push(col);
+      }
+    }
     
-    // 检查是否编辑的是 ID 列
-    if (headerValue && headerValue.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
+    // 如果存在ID列，检查当前编辑行中的所有ID列
+    if (idColumns.length > 0) {
       // 设置一个短暂的延迟，确保值已经更新
       Utilities.sleep(100);
-      // 只检查 ID 列的单元格
-      const idRange = sheet.getRange(range.getRow(), column, range.getNumRows(), 1);
-      checkIdConflicts({
-        sheet: sheet,
-        range: idRange
-      });
+      
+      // 对每个ID列进行检查
+      for (const idCol of idColumns) {
+        // 检查该行的ID列单元格
+        const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
+        checkIdConflicts({
+          sheet: sheet,
+          range: idRange
+        });
+      }
     }
   } catch (error) {
     console.error('onEdit触发器出错:', error);
