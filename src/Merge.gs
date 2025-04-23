@@ -583,50 +583,166 @@ function getPreviewState(sourceSheet, targetSheet) {
 }
 
 /**
- * 显示确认对话框
+ * 智能合并函数 - 根据当前表格状态自动判断是执行合并还是确认合并
+ * 使用原生UI代替HTML对话框，提高性能
  */
-function showConfirmDialog() {
+function smartNativeMerge() {
   try {
     // 获取当前活动页签
     const activeSheet = SpreadsheetApp.getActiveSheet();
     const sheetName = activeSheet.getName();
-    console.log('当前页签名称:', sheetName);
-    
-    // 从页签名称中解析源表和目标表
-    // 预览页签的命名格式为: "sourceSheet -> targetSheet 合并预览"
-    const match = sheetName.match(/^(.*?)\s*->\s*(.*?)\s*合并预览$/);
-    console.log('页签名称匹配结果:', match);
-    
-    if (!match) {
-      showAlert('请在合并预览页签中使用此功能');
-      return;
-    }
-    
-    const [_, sourceSheet, targetSheet] = match;
-    console.log('解析出的源表和目标表:', { sourceSheet, targetSheet });
-    
-    // 检查预览状态
-    const previewState = getPreviewState(sourceSheet.trim(), targetSheet.trim());
-    console.log('获取到的预览状态:', previewState);
-    
-    if (!previewState) {
-      showAlert('未找到有效的预览状态，请重新执行合并预览');
-      return;
-    }
-    
-    console.log('准备显示对话框');
-    // 显示合并对话框
     const ui = SpreadsheetApp.getUi();
-    const html = HtmlService.createHtmlOutputFromFile('MergeDialog')
-      .setWidth(600)
-      .setHeight(600)
-      .setTitle('合并表格');
     
-    ui.showModalDialog(html, '合并表格');
-    console.log('对话框已显示');
+    // 检查当前是否是预览页签
+    const previewMatch = sheetName.match(/^(.*?)\s*->\s*(.*?)\s*合并预览$/);
+    
+    // 如果是预览页签，执行确认合并流程
+    if (previewMatch) {
+      const [_, sourceSheet, targetSheet] = previewMatch;
+      
+      // 检查预览状态
+      const previewState = getPreviewState(sourceSheet.trim(), targetSheet.trim());
+      
+      if (!previewState) {
+        ui.alert('未找到有效的预览状态，请重新执行合并预览');
+        return;
+      }
+      
+      // 显示确认对话框
+      const confirmResponse = ui.alert(
+        '确认合并',
+        `确定要将"${sourceSheet.trim()}"的更改合并到"${targetSheet.trim()}"吗？\n\n` +
+        '此操作无法撤消。',
+        ui.ButtonSet.YES_NO
+      );
+      
+      if (confirmResponse == ui.Button.YES) {
+        // 显示处理中提示
+        ui.alert(
+          '正在处理',
+          '正在执行合并操作，这可能需要一些时间，请稍候...\n' +
+          '点击"确定"后，操作将在后台继续，完成后会显示结果。',
+          ui.ButtonSet.OK
+        );
+        
+        // 执行合并
+        const result = confirmMergeFromPreview(
+          sourceSheet.trim(),
+          targetSheet.trim(),
+          previewState.previewSheetName
+        );
+        
+        // 显示结果
+        if (result.success) {
+          ui.alert(
+            '合并成功',
+            result.message,
+            ui.ButtonSet.OK
+          );
+        } else {
+          ui.alert(
+            '合并失败',
+            result.message,
+            ui.ButtonSet.OK
+          );
+        }
+      }
+      return;
+    }
+    
+    // 如果不是预览页签，执行新建合并流程
+    
+    // 检查当前表格是否已经标记为已合并
+    if (sheetName.endsWith('(已合并)')) {
+      ui.alert(
+        '无法合并',
+        '当前表格已经标记为已合并状态，不能重复发起合并。',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+    
+    // 获取所有表格
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ss.getSheets().map(sheet => sheet.getName());
+    
+    // 过滤掉当前表格和已经标记为合并预览的表格
+    var targetSheets = sheets.filter(name => 
+      name !== sheetName && 
+      !name.includes(' -> ') && 
+      !name.includes('合并预览')
+    );
+    
+    if (targetSheets.length === 0) {
+      ui.alert(
+        '无法合并',
+        '没有可用的目标表格进行合并。',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+    
+    // 构建选择列表
+    var sheetList = targetSheets.map((name, index) => `${index + 1}. ${name}`).join('\n');
+    
+    // 显示目标表格选择对话框
+    var response = ui.prompt(
+      '选择目标表格',
+      '请输入要合并到的目标表格编号:\n\n' + sheetList + '\n\n当前表格: ' + sheetName,
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    // 处理用户选择
+    if (response.getSelectedButton() == ui.Button.OK) {
+      var selection = response.getResponseText().trim();
+      var index = parseInt(selection) - 1;
+      
+      // 验证输入
+      if (isNaN(index) || index < 0 || index >= targetSheets.length) {
+        ui.alert('错误', '请输入有效的表格编号 (1-' + targetSheets.length + ')', ui.ButtonSet.OK);
+        return;
+      }
+      
+      var targetSheetName = targetSheets[index];
+      
+      // 确认合并操作
+      var confirmResponse = ui.alert(
+        '确认合并操作',
+        '是否将 "' + sheetName + '" 合并到 "' + targetSheetName + '"?\n\n' + 
+        '这将创建一个合并预览页签，您可以在预览页签中查看并确认合并结果。',
+        ui.ButtonSet.YES_NO
+      );
+      
+      if (confirmResponse == ui.Button.YES) {
+        // 执行合并预览
+        var result = previewMerge({
+          sourceSheet: sheetName,
+          targetSheet: targetSheetName
+        });
+        
+        if (result.success) {
+          // 激活预览页签
+          var previewSheet = ss.getSheetByName(result.previewSheetName);
+          if (previewSheet) {
+            ss.setActiveSheet(previewSheet);
+          }
+          
+          // 显示成功信息
+          ui.alert(
+            '预览已生成',
+            result.message + '\n\n' +
+            '请检查预览结果，然后再次点击"合并表格"来完成合并。',
+            ui.ButtonSet.OK
+          );
+        } else {
+          // 显示错误信息
+          ui.alert('错误', result.message, ui.ButtonSet.OK);
+        }
+      }
+    }
   } catch (error) {
-    console.error('显示确认对话框失败:', error);
-    showAlert('显示确认对话框失败: ' + error.toString());
+    console.error('执行合并操作出错:', error);
+    SpreadsheetApp.getUi().alert('错误', '执行合并操作时出错: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
 

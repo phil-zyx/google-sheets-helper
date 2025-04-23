@@ -479,3 +479,115 @@ function createNewSheetTab() {
     }
   }
 }
+
+/**
+ * 使用原生UI实现比较功能
+ * 不使用HTML对话框，而是使用Google Sheets内置的UI组件
+ */
+function nativeCompare() {
+  try {
+    // 获取当前活动页签
+    var activeSheet = SpreadsheetApp.getActiveSheet();
+    var currentSheetName = activeSheet.getName();
+    var ui = SpreadsheetApp.getUi();
+    
+    // 检查当前表格是否为比较结果表
+    if (currentSheetName.includes(" vs ") && currentSheetName.endsWith("比较结果")) {
+      ui.alert(
+        '无法比较',
+        '当前表格是比较结果表，不能用作比较源表格。请先切换到其他表格。',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+    
+    // 获取所有表格
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ss.getSheets().map(sheet => sheet.getName());
+    
+    // 过滤掉当前表格和比较结果表
+    var targetSheets = sheets.filter(name => 
+      name !== currentSheetName && 
+      !(name.includes(" vs ") && name.endsWith("比较结果"))
+    );
+    
+    if (targetSheets.length === 0) {
+      ui.alert(
+        '无法比较',
+        '没有可用的目标表格进行比较。',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+    
+    // 构建选择列表
+    var sheetList = targetSheets.map((name, index) => `${index + 1}. ${name}`).join('\n');
+    
+    // 显示目标表格选择对话框
+    var response = ui.prompt(
+      '选择对比表格',
+      '请输入要与当前表格进行对比的表格编号:\n\n' + sheetList + '\n\n当前表格: ' + currentSheetName,
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    // 处理用户选择
+    if (response.getSelectedButton() == ui.Button.OK) {
+      var selection = response.getResponseText().trim();
+      var index = parseInt(selection) - 1;
+      
+      // 验证输入
+      if (isNaN(index) || index < 0 || index >= targetSheets.length) {
+        ui.alert('错误', '请输入有效的表格编号 (1-' + targetSheets.length + ')', ui.ButtonSet.OK);
+        return;
+      }
+      
+      var targetSheetName = targetSheets[index];
+      
+      // 确认比较操作
+      var confirmResponse = ui.alert(
+        '确认比较操作',
+        '是否比较 "' + currentSheetName + '" 和 "' + targetSheetName + '"?\n\n' + 
+        '比较结果将显示在新创建的表格中。',
+        ui.ButtonSet.YES_NO
+      );
+      
+      if (confirmResponse == ui.Button.YES) {
+        // 显示处理中提示
+        ui.alert(
+          '正在处理',
+          '正在执行比较操作，这可能需要一些时间，请稍候...\n' +
+          '点击"确定"后，操作将在后台继续，完成后会显示结果。',
+          ui.ButtonSet.OK
+        );
+        
+        // 执行比较
+        var result = compareSheets({
+          sheet1: currentSheetName,
+          sheet2: targetSheetName
+        });
+        
+        if (result.success) {
+          // 激活比较结果页签
+          var compareResultName = `${currentSheetName} vs ${targetSheetName} 比较结果`;
+          var compareSheet = ss.getSheetByName(compareResultName);
+          if (compareSheet) {
+            ss.setActiveSheet(compareSheet);
+          }
+          
+          // 显示成功信息
+          ui.alert(
+            '比较完成',
+            result.message,
+            ui.ButtonSet.OK
+          );
+        } else {
+          // 显示错误信息
+          ui.alert('错误', result.message, ui.ButtonSet.OK);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('执行比较操作出错:', error);
+    SpreadsheetApp.getUi().alert('错误', '执行比较操作时出错: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}

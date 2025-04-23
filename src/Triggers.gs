@@ -83,6 +83,8 @@ function onOpen(e) {
     SpreadsheetApp.getUi()
       .createAddonMenu()
       .addItem('新建页签', 'createNewSheetTab')
+      .addItem('比较差异原生UI', 'nativeCompare')  // 使用原生UI的比较功能
+      .addItem('合并表格原生UI', 'smartNativeMerge')  // 使用智能合并函数
       .addItem('比较差异', 'showCompareDialog')
       .addItem('合并表格', 'showMergeDialog')
       .addItem('清除所有标记', 'clearAllMarks')

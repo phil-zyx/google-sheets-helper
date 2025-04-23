@@ -3,24 +3,6 @@
 
 <head>
     <base target="_top">
-    <script>
-        // 初始化状态对象
-        const state = {
-            previewData: null
-        };
-
-        // 初始化DOM元素缓存对象
-        const elements = {
-            sourceSheet: null,
-            targetSheet: null,
-            status: null,
-            skeleton: null,
-            content: null,
-            conflictPanel: null,
-            prePreviewButtons: null,
-            postPreviewButtons: null
-        };
-    </script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -500,6 +482,7 @@
               <p><strong>源表格：</strong>${state.previewData.sourceSheet}</p>
               <p><strong>目标表格：</strong>${state.previewData.targetSheet}</p>
               <p><strong>预览表格：</strong>${state.previewData.previewSheetName}</p>
+              <p><strong>新增行数：</strong>${state.previewData.changes?.newRows?.length || 0}</p>
             </div>
           `;
                 }
@@ -572,10 +555,7 @@
                         document.querySelectorAll('button').forEach(btn => btn.disabled = false);
 
                         if (result.success) {
-                            // 构建包含新增行数的消息
-                            const newRowText = result.newRowCount !== undefined ?
-                                `\n新增行数: ${result.newRowCount}` : '';
-                            showStatus(result.message + newRowText);
+                            showStatus(result.message);
                             setTimeout(closeDialog, 2000);
                         } else {
                             showStatus(result.message, true);
