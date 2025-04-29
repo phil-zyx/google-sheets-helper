@@ -214,115 +214,38 @@ function clearAllMarks(showConfirm = true) {
 
     const sheet = SpreadsheetApp.getActiveSheet();
     const range = sheet.getDataRange();
-    const [backgrounds, notes, values] = [
-      range.getBackgrounds(),
-      range.getNotes(),
-      range.getValues()
-    ];
+    const [backgrounds, notes] = [range.getBackgrounds(), range.getNotes()];
     
-    // 添加保存水平对齐方式
-    const horizontalAlignments = range.getHorizontalAlignments();
-
-    const newBackgrounds = [];
-    const newNotes = [];
-    const newValues = [];
-    const newHorizontalAlignments = []; // 添加新的对齐方式数组
-    const rowsToKeep = [];
-
-    // 检查每一行，标记需要保留的行
-    for (let i = 0; i < backgrounds.length; i++) {
-      let isDeletedRow = true;
-      let hasHighlight = false;
-
-      // 检查这一行是否是比较时新增的行
-      for (let j = 0; j < backgrounds[i].length; j++) {
-        const currentBg = backgrounds[i][j];
-        const currentNote = notes[i][j];
-
-        if (currentBg === COMPARE_CONSTANTS.COLORS.REMOVED) {
-          hasHighlight = true;
+    const newBackgrounds = backgrounds.map(row => 
+      row.map(bg => {
+        // 检查是否是系统背景色
+        if ([
+          COMPARE_CONSTANTS.COLORS.MODIFIED,
+          COMPARE_CONSTANTS.COLORS.ADDED,
+          COMPARE_CONSTANTS.COLORS.REMOVED,
+          COMPARE_CONSTANTS.COLORS.HEADER_MODIFIED,
+          SHEET_CONSTANTS.COLORS.MODIFIED,
+          SHEET_CONSTANTS.COLORS.ADDED,
+          MERGE_CONSTANTS.COLORS.NEW,
+          MERGE_CONSTANTS.COLORS.CONFLICT,
+          MERGE_CONSTANTS.COLORS.UPDATED,
+          MERGE_CONSTANTS.COLORS.MERGED,
+          MERGE_CONSTANTS.COLORS.RESOLVED,
+          ID_CHECKER_CONFIG.COLORS.CONFLICT
+        ].includes(bg)) {
+          return null;  // 清除系统背景色
         }
+        return bg;  // 保持非系统背景色不变
+      })
+    );
 
-        if (currentNote && currentNote.includes("此行在基准表中不存在")) {
-          hasHighlight = true;
-        }
-
-        // 如果这一行有任何非高亮的单元格，说明不是新增的行
-        if (currentBg !== COMPARE_CONSTANTS.COLORS.REMOVED && 
-            currentBg !== COMPARE_CONSTANTS.COLORS.MODIFIED && 
-            currentBg !== COMPARE_CONSTANTS.COLORS.ADDED && 
-            currentBg !== COMPARE_CONSTANTS.COLORS.HEADER_MODIFIED) {
-          isDeletedRow = false;
-        }
-      }
-
-      // 如果这一行不是新增的行，或者是第一行（表头），就保留它
-      if (!isDeletedRow || !hasHighlight || i === 0) {
-        rowsToKeep.push(i);
-
-        const backgroundRow = [];
-        const noteRow = [];
-        const alignmentRow = []; // 添加对齐方式行
-
-        for (let j = 0; j < backgrounds[i].length; j++) {
-          const currentBg = backgrounds[i][j];
-          let currentNote = notes[i][j];
-          const currentAlignment = horizontalAlignments[i][j]; // 获取当前对齐方式
-
-          // 清除所有比较标记的背景色
-          if (currentBg === COMPARE_CONSTANTS.COLORS.MODIFIED || 
-              currentBg === COMPARE_CONSTANTS.COLORS.ADDED || 
-              currentBg === COMPARE_CONSTANTS.COLORS.REMOVED || 
-              currentBg === COMPARE_CONSTANTS.COLORS.HEADER_MODIFIED ||
-              currentBg === SHEET_CONSTANTS.COLORS.MODIFIED ||
-              currentBg === SHEET_CONSTANTS.COLORS.ADDED ||
-              currentBg === MERGE_CONSTANTS.COLORS.NEW ||
-              currentBg === MERGE_CONSTANTS.COLORS.CONFLICT ||
-              currentBg === MERGE_CONSTANTS.COLORS.UPDATED ||
-              currentBg === MERGE_CONSTANTS.COLORS.MERGED ||
-              currentBg === MERGE_CONSTANTS.COLORS.RESOLVED) {
-            backgroundRow.push(null);
-          } else {
-            backgroundRow.push(currentBg);
-          }
-
-          // 清除系统注释
-          if (currentNote) {
-            currentNote = NoteManager.removeAllSystemNotes(currentNote);
-            noteRow.push(currentNote || '');
-          } else {
-            noteRow.push('');
-          }
-          
-          // 保存对齐方式
-          alignmentRow.push(currentAlignment);
-        }
-
-        newBackgrounds.push(backgroundRow);
-        newNotes.push(noteRow);
-        newValues.push(values[i]);
-        newHorizontalAlignments.push(alignmentRow); // 添加对齐方式行到新数组
-      }
-    }
+    const newNotes = notes.map(row =>
+      row.map(note => note ? NoteManager.removeAllSystemNotes(note) : '')
+    );
 
     // 更新表格
-    if (rowsToKeep.length < backgrounds.length) {
-      // 如果有行被删除，更新表格并删除多余的行
-      const newRange = sheet.getRange(1, 1, newBackgrounds.length, backgrounds[0].length);
-      newRange.setBackgrounds(newBackgrounds);
-      newRange.setNotes(newNotes);
-      newRange.setValues(newValues);
-      newRange.setHorizontalAlignments(newHorizontalAlignments); // 设置水平对齐方式
-
-      if (backgrounds.length > newBackgrounds.length) {
-        sheet.deleteRows(newBackgrounds.length + 1, backgrounds.length - newBackgrounds.length);
-      }
-    } else {
-      // 如果没有行被删除，只更新背景色和注释
-      range.setBackgrounds(newBackgrounds);
-      range.setNotes(newNotes);
-      range.setHorizontalAlignments(newHorizontalAlignments); // 设置水平对齐方式
-    }
+    range.setBackgrounds(newBackgrounds);
+    range.setNotes(newNotes);
 
     return {
       success: true,
