@@ -162,13 +162,23 @@ function onEdit(e) {
       }
     }
     
-    // 如果存在ID列，检查当前编辑行中的所有ID列
-    if (idColumns.length > 0) {
+    // 如果存在ID列，并且编辑的单元格在ID列中，才检查冲突
+    const editedColStart = range.getColumn();
+    const editedColEnd = editedColStart + range.getNumColumns() - 1;
+    const editedColumns = Array.from({ length: editedColEnd - editedColStart + 1 }, (_, i) => editedColStart + i);
+
+    // 检查编辑的列是否与任何ID列重叠
+    const isEditingIdColumn = editedColumns.some(col => idColumns.includes(col));
+
+    if (idColumns.length > 0 && isEditingIdColumn) {
       // 设置一个短暂的延迟，确保值已经更新
       Utilities.sleep(100);
       
-      // 对每个ID列进行检查
-      for (const idCol of idColumns) {
+      // 筛选出被编辑的ID列
+      const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
+
+      // 对每个相关的ID列进行检查
+      for (const idCol of relevantIdColumns) {
         // 检查该行的ID列单元格
         const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
         checkIdConflicts({

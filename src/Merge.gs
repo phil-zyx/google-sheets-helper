@@ -798,6 +798,63 @@ function previewMerge(config) {
     var result = mergeSheets(config, previewSheet);
     
     if (result.success) {
+      // 检查预览表中的ID是否有重复
+      // 找到ID列
+      const headers = previewSheet.getRange(1, 1, 1, previewSheet.getLastColumn()).getValues()[0];
+      let idColIndex = -1;
+      
+      headers.forEach((header, index) => {
+        if (header.toString().endsWith(MERGE_CONSTANTS.ID_SUFFIX)) {
+          idColIndex = index;
+        }
+      });
+      
+      if (idColIndex !== -1) {
+        // 获取预览表中的所有ID
+        const idColumnData = previewSheet.getRange(2, idColIndex + 1, previewSheet.getLastRow() - 1, 1).getValues();
+        const duplicateIdsMap = new Map();
+        
+        // 查找重复ID
+        idColumnData.forEach((row, index) => {
+          const id = row[0]?.toString().trim();
+          if (!id) return; // 跳过空ID
+          
+          if (!duplicateIdsMap.has(id)) {
+            duplicateIdsMap.set(id, [index + 2]); // +2 因为我们从第2行开始，且索引从0开始
+          } else {
+            duplicateIdsMap.get(id).push(index + 2);
+          }
+        });
+        
+        // 标记预览表中的重复ID
+        let hasDuplicates = false;
+        for (const [id, rows] of duplicateIdsMap.entries()) {
+          if (rows.length > 1) {
+            hasDuplicates = true;
+            // 标记这个ID的所有实例
+            for (const row of rows) {
+              const cell = previewSheet.getRange(row, idColIndex + 1);
+              cell.setBackground(ID_CHECKER_CONFIG.COLORS.CONFLICT);
+              
+              // 创建冲突注释，显示所有重复位置
+              const conflictLocations = rows.filter(r => r !== row).map(r => `第${r}行`).join('\n');
+              const userNote = `在以下位置重复:\n${conflictLocations}`;
+              
+              cell.setNote(NoteManager.addSystemNote(
+                cell.getNote(),
+                NOTE_CONSTANTS.TYPES.CONFLICT,
+                userNote
+              ));
+            }
+          }
+        }
+        
+        // 如果发现重复ID，添加警告信息
+        if (hasDuplicates) {
+          result.message += '\n⚠️ 警告：预览表中存在重复ID，已用红色标记。请解决冲突后再确认合并。';
+        }
+      }
+      
       return {
         success: true,
         previewSheetName: previewSheet.getName(),
@@ -1028,25 +1085,15 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
         // 确保行长度一致并按需格式化每个值
         const paddedRow = [];
         for (let i = 0; i < row.length; i++) {
-          // 检查对应的列名是否有特定前缀
-          const columnHeader = i < headerRow.length ? headerRow[i] : '';
-          
-          // 如果列名以A_BOL_开头且值是布尔类型，则应用格式化
-          if (columnHeader && columnHeader.toString().startsWith('A_BOL_')) {
-            // 对布尔值应用normalizeValue
-            Logger.log('bol init %s', row[i])
-            paddedRow.push(normalizeValue(row[i]));
-          } else {
-            // 其他值保持原样
-            paddedRow.push(row[i]);
-          }
+          // 直接推送原始值，不进行任何修改或 normalize
+          paddedRow.push(row[i]);
         }
-        
+
         // 填充剩余列
         while (paddedRow.length < maxColumns) {
           paddedRow.push('');
         }
-        
+
         newRowsMap.set(id, {
           data: paddedRow, // 存储处理后的完整行数据
           originalIndex: idx
@@ -1106,19 +1153,8 @@ function batchInsertRowsInOrder(sheet, newRows, idColIndex, options = {}) {
         // 确保行长度一致并按需格式化值
         const paddedRow = [];
         for (let i = 0; i < existingRow.data.length; i++) {
-          // 检查对应的列名是否有特定前缀
-          const columnHeader = i < headerRow.length ? headerRow[i] : '';
-          
-          // 如果列名以A_BOL_开头且值是布尔类型，则应用格式化
-          if (columnHeader && columnHeader.toString().startsWith('A_BOL_') && 
-              (typeof existingRow.data[i] === 'boolean' || 
-               (typeof existingRow.data[i] === 'string' && (existingRow.data[i].toUpperCase() === 'TRUE' || existingRow.data[i].toUpperCase() === 'FALSE')))) {
-            // 对布尔值应用normalizeValue
-            paddedRow.push(normalizeValue(existingRow.data[i]));
-          } else {
-            // 其他值保持原样
-            paddedRow.push(existingRow.data[i]);
-          }
+          // 直接推送原始值，不进行任何修改或 normalize
+           paddedRow.push(existingRow.data[i]);
         }
         
         // 填充剩余列
