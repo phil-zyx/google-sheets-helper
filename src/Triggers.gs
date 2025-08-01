@@ -102,94 +102,158 @@ function onOpen(e) {
  */
 function onEdit(e) {
   try {
-    // 检查表格是否包含ID列
-    const sheet = e.range.getSheet();
-    const headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    const hasIdColumn = headerRow.some(header => 
-      header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)
-    );
-    
-    // 如果没有ID列，直接返回
-    if (!hasIdColumn) return;
+    const context = createEditContext(e);
+    if (!context.hasIdColumn) return;
 
-    // 1. 处理基准值记录和颜色标记
-    const range = e.range;
-    const oldValue = e.oldValue;
-    const newValue = range.getValue();
-    
-    // 获取当前单元格的背景色和注释
-    const currentBg = range.getBackground();
-    let note = range.getNote();
-    
-    // 如果当前单元格已经是新增状态（绿色），则不做任何改变
-    if (currentBg !== SHEET_CONSTANTS.COLORS.ADDED) {
-    // 检查是否已经有修改记录（通过背景色判断）
-    const isAlreadyModified = currentBg === SHEET_CONSTANTS.COLORS.MODIFIED;
-
-    if (oldValue !== undefined) {  // 是修改操作
-      // 设置为修改颜色（浅蓝色）
-      range.setBackground(SHEET_CONSTANTS.COLORS.MODIFIED);
-      
-      // 只在首次修改时记录基准值
-      if (!isAlreadyModified) {
-        // 保持原始值的格式
-        let baseValue = oldValue;
-        // 如果是整数，确保以整数形式存储
-        if (Number.isInteger(Number(oldValue))) {
-          baseValue = parseInt(oldValue, 10);
-        }
-        
-        // 添加基准值到系统注释，保留用户原有注释
-        const newNote = NoteManager.addSystemNote(
-          note,
-          NOTE_CONSTANTS.TYPES.BASE_VALUE,
-          baseValue.toString()
-        );
-        range.setNote(newNote);
-      }
-    } else if (newValue && newValue.toString().trim() !== '') {
-      // 如果是新增值，设置为新增颜色（淡绿色）
-      range.setBackground(SHEET_CONSTANTS.COLORS.ADDED);
-    }
-    }
-
-    // 2. 处理ID检查 - 无论是否有oldValue都需要检查
-    // 查找所有ID列
-    const idColumns = [];
-    for (let col = 1; col <= headerRow.length; col++) {
-      const header = headerRow[col-1];
-      if (header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
-        idColumns.push(col);
-      }
-    }
-    
-    // 如果存在ID列，并且编辑的单元格在ID列中，才检查冲突
-    const editedColStart = range.getColumn();
-    const editedColEnd = editedColStart + range.getNumColumns() - 1;
-    const editedColumns = Array.from({ length: editedColEnd - editedColStart + 1 }, (_, i) => editedColStart + i);
-
-    // 检查编辑的列是否与任何ID列重叠
-    const isEditingIdColumn = editedColumns.some(col => idColumns.includes(col));
-
-    if (idColumns.length > 0 && isEditingIdColumn) {
-      // 设置一个短暂的延迟，确保值已经更新
-      Utilities.sleep(100);
-      
-      // 筛选出被编辑的ID列
-      const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
-
-      // 对每个相关的ID列进行检查
-      for (const idCol of relevantIdColumns) {
-        // 检查该行的ID列单元格
-        const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
-        checkIdConflicts({
-          sheet: sheet,
-          range: idRange
-        });
-      }
-    }
+    handleValueTracking(context);
+    handleIdConflictCheck(context);
   } catch (error) {
     console.error('onEdit触发器出错:', error);
+  }
+}
+
+/**
+ * 创建编辑上下文信息
+ */
+function createEditContext(e) {
+  const sheet = e.range.getSheet();
+  const headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const hasIdColumn = headerRow.some(header => 
+    header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)
+  );
+
+  return {
+    sheet,
+    range: e.range,
+    oldValue: e.oldValue,
+    newValue: e.range.getValue(),
+    headerRow,
+    hasIdColumn
+  };
+}
+
+/**
+ * 处理值变更追踪和颜色标记
+ */
+function handleValueTracking(context) {
+  const { range, oldValue, newValue } = context;
+  const currentBg = range.getBackground();
+  
+  // 如果当前单元格已经是新增状态（绿色），则不做任何改变
+  if (currentBg === SHEET_CONSTANTS.COLORS.ADDED) return;
+
+  if (shouldTrackAsModification(oldValue, currentBg)) {
+    markAsModified(range, oldValue, currentBg);
+  } else if (shouldMarkAsAdded(newValue)) {
+    range.setBackground(SHEET_CONSTANTS.COLORS.ADDED);
+  }
+}
+
+/**
+ * 判断是否应该标记为修改
+ */
+function shouldTrackAsModification(oldValue, currentBg) {
+  return oldValue !== undefined;
+}
+
+/**
+ * 判断是否应该标记为新增
+ */
+function shouldMarkAsAdded(newValue) {
+  return newValue && newValue.toString().trim() !== '';
+}
+
+/**
+ * 标记单元格为修改状态并记录基准值
+ */
+function markAsModified(range, oldValue, currentBg) {
+  const isAlreadyModified = currentBg === SHEET_CONSTANTS.COLORS.MODIFIED;
+  
+  // 设置为修改颜色（浅蓝色）
+  range.setBackground(SHEET_CONSTANTS.COLORS.MODIFIED);
+  
+  // 只在首次修改时记录基准值
+  if (!isAlreadyModified) {
+    recordBaseValue(range, oldValue);
+  }
+}
+
+/**
+ * 记录基准值到注释中
+ */
+function recordBaseValue(range, oldValue) {
+  // 保持原始值的格式
+  let baseValue = oldValue;
+  if (Number.isInteger(Number(oldValue))) {
+    baseValue = parseInt(oldValue, 10);
+  }
+  
+  // 添加基准值到系统注释，保留用户原有注释
+  const note = range.getNote();
+  const newNote = NoteManager.addSystemNote(
+    note,
+    NOTE_CONSTANTS.TYPES.BASE_VALUE,
+    baseValue.toString()
+  );
+  range.setNote(newNote);
+}
+
+/**
+ * 处理ID冲突检查
+ */
+function handleIdConflictCheck(context) {
+  const { headerRow, range } = context;
+  const idColumns = findIdColumns(headerRow);
+  
+  if (idColumns.length === 0) return;
+  
+  const editedColumns = getEditedColumns(range);
+  const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
+  
+  if (relevantIdColumns.length === 0) return;
+  
+  // 设置延迟确保值已更新
+  Utilities.sleep(100);
+  
+  // 检查相关ID列的冲突
+  checkRelevantIdColumns(context, relevantIdColumns);
+}
+
+/**
+ * 查找所有ID列
+ */
+function findIdColumns(headerRow) {
+  const idColumns = [];
+  for (let col = 1; col <= headerRow.length; col++) {
+    const header = headerRow[col-1];
+    if (header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
+      idColumns.push(col);
+    }
+  }
+  return idColumns;
+}
+
+/**
+ * 获取被编辑的列数组
+ */
+function getEditedColumns(range) {
+  const editedColStart = range.getColumn();
+  const editedColEnd = editedColStart + range.getNumColumns() - 1;
+  return Array.from({ length: editedColEnd - editedColStart + 1 }, (_, i) => editedColStart + i);
+}
+
+/**
+ * 检查相关ID列的冲突
+ */
+function checkRelevantIdColumns(context, relevantIdColumns) {
+  const { sheet, range } = context;
+  
+  for (const idCol of relevantIdColumns) {
+    const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
+    checkIdConflicts({
+      sheet: sheet,
+      range: idRange
+    });
   }
 }
 
