@@ -34,6 +34,7 @@
     },
     "urlFetchWhitelist": [
         "https://writesome.oss-cn-chengdu.aliyuncs.com/",
-        "https://www.github.com/"
+        "https://www.github.com/",
+        "https://script.google.com/"
     ]
 }

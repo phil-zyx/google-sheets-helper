@@ -87,6 +87,7 @@ function onOpen(e) {
       .addItem('合并表格原生UI', 'smartNativeMerge')  // 使用智能合并函数
       .addItem('比较差异', 'showCompareDialog')
       .addItem('合并表格', 'showMergeDialog')
+      .addItem('配置表检查', 'checkConfigTable')  // 新增配置检查功能
       .addItem('清除所有标记', 'clearAllMarks')
       .addItem('刷新触发器', 'createEditTrigger')
       .addToUi();
@@ -342,6 +343,82 @@ function cardClearAllMarks(e) {
     }
   } catch (error) {
     return createErrorCard('清除标记失败: ' + error.toString());
+  }
+}
+
+/**
+ * 配置表检查 - 调用外部接口
+ */
+function checkConfigTable() {
+  try {
+    const sheetName = SpreadsheetApp.getActiveSheet().getName();
+    const userEmail = Session.getActiveUser().getEmail();
+    
+    // 构建请求URL，包含必要的查询参数
+    const url = `https://script.google.com/a/macros/nibirutech.com/s/AKfycbzEsIxDkszo5CLZ4X1tewaDIC-udhCktaYSyBX6OmeiLKMmzn5rgnM0IwyKb9W9syI/exec?api=v1&action=runWorkflow&workflowId=WF1752049455621&apiKey=test-api-key-123&sheetName=${encodeURIComponent(sheetName)}`;
+    
+    // 准备POST请求数据
+    const payload = {
+      sheetName: sheetName,
+      userEmail: userEmail
+    };
+    
+    // 获取OAuth token
+    let token;
+    try {
+      token = ScriptApp.getOAuthToken();
+      console.log('OAuth token obtained successfully');
+    } catch (tokenError) {
+      console.error('Failed to get OAuth token:', tokenError);
+      SpreadsheetApp.getActive().toast(
+        `获取认证令牌失败: ${tokenError.toString()}`,
+        '认证错误',
+        5
+      );
+      return;
+    }
+    
+    // 发送POST请求
+    const response = UrlFetchApp.fetch(url, {
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    console.log('配置检查响应:', responseCode, responseText);
+    console.log('请求URL:', url);
+    console.log('请求头:', response.getHeaders());
+    
+    if (responseCode === 200) {
+      SpreadsheetApp.getActive().toast(
+        `配置检查请求已发送\n页签: ${sheetName}\n用户: ${userEmail}`,
+        '检查请求成功',
+        5
+      );
+    } else {
+      SpreadsheetApp.getActive().toast(
+        `配置检查请求失败\n状态码: ${responseCode}\n响应: ${responseText}`,
+        '检查请求失败',
+        8
+      );
+    }
+    
+  } catch (error) {
+    console.error('配置检查失败:', error);
+    SpreadsheetApp.getActive().toast(
+      `配置检查失败: ${error.toString()}`,
+      '错误',
+      5
+    );
   }
 }
 
