@@ -83,12 +83,13 @@ function onOpen(e) {
     SpreadsheetApp.getUi()
       .createAddonMenu()
       .addItem('新建页签', 'createNewSheetTab')
-      .addItem('比较差异原生UI', 'nativeCompare')  // 使用原生UI的比较功能
-      .addItem('合并表格原生UI', 'smartNativeMerge')  // 使用智能合并函数
-      .addItem('比较差异', 'showCompareDialog')
-      .addItem('合并表格', 'showMergeDialog')
-      .addItem('配置表检查', 'checkConfigTable')  // 新增配置检查功能
+      .addItem('比较差异', 'nativeCompare')  // 使用原生UI的比较功能
+      .addItem('合并表格', 'smartNativeMerge')  // 使用智能合并函数
+      // .addItem('比较差异', 'showCompareDialog')
+      // .addItem('合并表格', 'showMergeDialog')
+      .addItem('配置表检查(开发中)', 'checkConfigTable')  // 新增配置检查功能
       .addItem('清除所有标记', 'clearAllMarks')
+      .addItem('更新冲突标记', 'validateAndClearConflictMarks')  // 🆕 新增手动清理功能
       .addItem('刷新触发器', 'createEditTrigger')
       .addToUi();
   } catch (error) {
@@ -541,4 +542,252 @@ function testMenuCreation() {
 
 function showAlert() {
   SpreadsheetApp.getUi().alert('测试成功!');
+}
+
+/**
+ * 手动验证并清理所有冲突标记
+ * 这是一个兜底功能，用于清理可能过期的冲突标记
+ */
+function validateAndClearConflictMarks() {
+  console.log(`🚀 [手动清理] 开始验证所有冲突标记`);
+  
+  const startTime = new Date().getTime();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  let totalSheets = 0;
+  let totalCells = 0;
+  let conflictCells = 0;
+  let clearedConflicts = 0;
+  let validConflicts = 0;
+  
+  const results = {
+    sheets: [],
+    summary: {}
+  };
+  
+  try {
+    // 遍历所有表格
+    const sheets = ss.getSheets();
+    totalSheets = sheets.length;
+    
+    for (const sheet of sheets) {
+      const sheetName = sheet.getName();
+      console.log(`📑 [检查表格] ${sheetName}`);
+      
+      const sheetResult = {
+        name: sheetName,
+        totalCells: 0,
+        conflictCells: 0,
+        clearedConflicts: 0,
+        validConflicts: 0,
+        errors: []
+      };
+      
+      try {
+        const lastRow = sheet.getLastRow();
+        const lastColumn = sheet.getLastColumn();
+        
+        if (lastRow <= 1 || lastColumn === 0) {
+          console.log(`⏭️ [跳过表格] ${sheetName} - 无数据`);
+          sheetResult.totalCells = 0;
+          results.sheets.push(sheetResult);
+          continue;
+        }
+        
+        // 批量获取数据以提高性能
+        const range = sheet.getRange(1, 1, lastRow, lastColumn);
+        const backgrounds = range.getBackgrounds();
+        const values = range.getValues();
+        
+        sheetResult.totalCells = lastRow * lastColumn;
+        totalCells += sheetResult.totalCells;
+        
+        console.log(`📊 [表格范围] ${sheetName} - ${lastRow}行 × ${lastColumn}列 = ${sheetResult.totalCells}个单元格`);
+        
+        // 查找所有冲突标记的单元格
+        for (let row = 0; row < backgrounds.length; row++) {
+          for (let col = 0; col < backgrounds[row].length; col++) {
+            
+            // 检查是否是冲突标记
+            if (backgrounds[row][col] === ID_CHECKER_CONFIG.COLORS.CONFLICT) {
+              sheetResult.conflictCells++;
+              conflictCells++;
+              
+              const actualRow = row + 1;
+              const actualCol = col + 1;
+              const cellValue = values[row][col];
+              
+              console.log(`🎯 [发现冲突标记] ${sheetName} 第${actualRow}行第${actualCol}列 - 值: "${cellValue}"`);
+              
+              try {
+                // 重新检查这个单元格的冲突状态
+                const cellRange = sheet.getRange(actualRow, actualCol);
+                const stillHasConflict = recheckCellConflictStatus(cellRange, sheetName);
+                
+                if (!stillHasConflict) {
+                  console.log(`✅ [清除过期冲突] ${sheetName} 第${actualRow}行第${actualCol}列`);
+                  
+                  // 清除冲突标记
+                  cellRange.setBackground(null);
+                  NoteManager.removeMarkFromCell(cellRange, NOTE_CONSTANTS.TYPES.CONFLICT);
+                  
+                  sheetResult.clearedConflicts++;
+                  clearedConflicts++;
+                } else {
+                  console.log(`🔄 [保持有效冲突] ${sheetName} 第${actualRow}行第${actualCol}列`);
+                  sheetResult.validConflicts++;
+                  validConflicts++;
+                }
+              } catch (cellError) {
+                console.error(`❌ [单元格处理错误] ${sheetName} 第${actualRow}行第${actualCol}列:`, cellError);
+                sheetResult.errors.push(`第${actualRow}行第${actualCol}列: ${cellError.message}`);
+              }
+            }
+          }
+        }
+        
+        console.log(`✅ [表格完成] ${sheetName} - 冲突标记: ${sheetResult.conflictCells}, 清理: ${sheetResult.clearedConflicts}, 保留: ${sheetResult.validConflicts}`);
+        
+      } catch (sheetError) {
+        console.error(`❌ [表格处理错误] ${sheetName}:`, sheetError);
+        sheetResult.errors.push(`表格处理失败: ${sheetError.message}`);
+      }
+      
+      results.sheets.push(sheetResult);
+    }
+    
+    const endTime = new Date().getTime();
+    const duration = endTime - startTime;
+    
+    // 汇总结果
+    results.summary = {
+      totalSheets,
+      totalCells,
+      conflictCells,
+      clearedConflicts,
+      validConflicts,
+      duration,
+      success: true
+    };
+    
+    console.log(`🏁 [清理完成] 总耗时: ${duration}ms`);
+    console.log(`📊 [最终统计] 表格: ${totalSheets}, 单元格: ${totalCells}, 冲突标记: ${conflictCells}, 清理: ${clearedConflicts}, 保留: ${validConflicts}`);
+    
+    // 显示结果给用户
+    showCleanupResults(results);
+    
+    return results;
+    
+  } catch (error) {
+    console.error(`💥 [清理异常] 手动清理过程中出现错误:`, error);
+    
+    const errorResult = {
+      summary: {
+        success: false,
+        error: error.message,
+        duration: new Date().getTime() - startTime
+      }
+    };
+    
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `冲突标记清理失败: ${error.message}`, 
+      '清理错误', 
+      10
+    );
+    
+    return errorResult;
+  }
+}
+
+/**
+ * 重新检查单个单元格的冲突状态
+ * 这个函数被手动清理功能调用
+ */
+function recheckCellConflictStatus(cellRange, sheetName) {
+  const value = cellRange.getValue();
+  if (!value || !value.toString().trim()) {
+    console.log(`📝 [重检查] 单元格值为空，无冲突`);
+    return false;
+  }
+  
+  // 检查是否是ID列
+  const headerValue = cellRange.getSheet().getRange(1, cellRange.getColumn()).getValue();
+  if (!headerValue || !headerValue.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
+    console.log(`📝 [重检查] 不是ID列，无冲突`);
+    return false;
+  }
+  
+  console.log(`🔍 [重检查] 开始检查单元格冲突状态 - 值: "${value}", 列标题: "${headerValue}"`);
+  
+  // 使用现有的冲突检查逻辑
+  const conflicts = checkSingleIdConflictImproved({
+    value: value,
+    sheet: sheetName,
+    row: cellRange.getRow(),
+    column: cellRange.getColumn(),
+    columnName: headerValue
+  });
+  
+  const hasConflict = conflicts.length > 0;
+  console.log(`📝 [重检查结果] ${hasConflict ? '仍有冲突' : '无冲突'} - 冲突数量: ${conflicts.length}`);
+  
+  return hasConflict;
+}
+
+/**
+ * 显示清理结果给用户
+ */
+function showCleanupResults(results) {
+  const { summary, sheets } = results;
+  
+  if (!summary.success) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `清理失败: ${summary.error}`,
+      '清理错误',
+      10
+    );
+    return;
+  }
+  
+  // 构建详细报告
+  let message = `🧹 冲突标记清理完成！\n\n`;
+  message += `📊 总体统计:\n`;
+  message += `• 检查表格: ${summary.totalSheets} 个\n`;
+  message += `• 检查单元格: ${summary.totalCells.toLocaleString()} 个\n`;
+  message += `• 发现冲突标记: ${summary.conflictCells} 个\n`;
+  message += `• 清理过期冲突: ${summary.clearedConflicts} 个\n`;
+  message += `• 保留有效冲突: ${summary.validConflicts} 个\n`;
+  message += `• 处理耗时: ${summary.duration}ms\n\n`;
+  
+  // 添加表格详情（只显示有操作的表格）
+  const activeSheets = sheets.filter(sheet => sheet.conflictCells > 0);
+  if (activeSheets.length > 0) {
+    message += `📋 表格详情:\n`;
+    activeSheets.forEach(sheet => {
+      message += `• ${sheet.name}: 冲突${sheet.conflictCells}, 清理${sheet.clearedConflicts}, 保留${sheet.validConflicts}\n`;
+    });
+  }
+  
+  // 显示结果
+  if (summary.clearedConflicts > 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `成功清理了 ${summary.clearedConflicts} 个过期的冲突标记！\n保留 ${summary.validConflicts} 个有效冲突。`,
+      '清理完成',
+      8
+    );
+  } else if (summary.conflictCells === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      '未发现任何冲突标记，表格状态良好！',
+      '清理完成',
+      5
+    );
+  } else {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `所有 ${summary.validConflicts} 个冲突标记都是有效的，无需清理。`,
+      '清理完成',
+      5
+    );
+  }
+  
+  console.log(`📋 [清理报告]\n${message}`);
 }
