@@ -51,14 +51,14 @@ function createEditTrigger(showToast = true) {
     let hasEditTrigger = false;
     
     triggers.forEach(trigger => {
-      if (trigger.getHandlerFunction() === 'onEdit') {
+      if (trigger.getHandlerFunction() === 'onEditHandler') {
         hasEditTrigger = true;
       }
     });
 
     if (!hasEditTrigger) {
       const ss = SpreadsheetApp.getActive();
-      ScriptApp.newTrigger('onEdit')
+      ScriptApp.newTrigger('onEditHandler')
         .forSpreadsheet(ss)
         .onEdit()
         .create();
@@ -98,27 +98,63 @@ function onOpen(e) {
 }
 
 /**
- * 当编辑表格时的触发器
- * @param {Object} e 编辑事件对象
+ * 当编辑表格时的触发器（优化版）
  */
-function onEdit(e) {
+function onEditHandler(e) {
+  const startTime = Date.now();
+  
   try {
-    const context = createEditContext(e);
-    if (!context.hasIdColumn) return;
+    // 快速预检查：是否需要处理
+    if (!quickPreCheck(e)) {
+      console.log(`⚡ [快速退出] 无需处理 - 耗时: ${Date.now() - startTime}ms`);
+      return;
+    }
+    
+    const context = createEditContextOptimized(e);
+    if (!context.hasIdColumn) {
+      console.log(`⚡ [无ID列] 跳过处理 - 耗时: ${Date.now() - startTime}ms`);
+      return;
+    }
 
-    handleValueTracking(context);
-    handleIdConflictCheck(context);
+    // 并行处理值追踪和ID冲突检查
+    handleValueTrackingOptimized(context);
+    handleIdConflictCheckOptimized(context);
+    
+    console.log(`✅ [触发器完成] 总耗时: ${Date.now() - startTime}ms`);
   } catch (error) {
-    console.error('onEdit触发器出错:', error);
+    console.error('onEditHandler触发器出错:', error);
+    console.log(`❌ [触发器异常] 耗时: ${Date.now() - startTime}ms`);
   }
 }
 
 /**
- * 创建编辑上下文信息
+ * 快速预检查
  */
-function createEditContext(e) {
+function quickPreCheck(e) {
+  // 跳过大范围编辑（如复制粘贴大量数据）
+  if (e.range.getNumRows() > 10 || e.range.getNumColumns() > 10) {
+    return false;
+  }
+  
+  // 跳过表头编辑
+  if (e.range.getRow() === 1) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * 优化的编辑上下文创建
+ */
+function createEditContextOptimized(e) {
   const sheet = e.range.getSheet();
-  const headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  
+  // 只读取必要的表头范围
+  const lastCol = sheet.getLastColumn();
+  const headerRow = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  
+  // 快速检查是否有ID列
   const hasIdColumn = headerRow.some(header => 
     header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)
   );
@@ -129,109 +165,98 @@ function createEditContext(e) {
     oldValue: e.oldValue,
     newValue: e.range.getValue(),
     headerRow,
-    hasIdColumn
+    hasIdColumn,
+    lastCol
   };
 }
 
 /**
- * 处理值变更追踪和颜色标记
+ * 优化的值追踪处理
  */
-function handleValueTracking(context) {
+function handleValueTrackingOptimized(context) {
   const { range, oldValue, newValue } = context;
-  const currentBg = range.getBackground();
   
-  // 如果当前单元格已经是新增状态（绿色），则不做任何改变
+  // 批量获取当前状态，减少API调用
+  const currentBg = range.getBackground();
+
+  // 如果已经是新增状态，直接返回
   if (currentBg === SHEET_CONSTANTS.COLORS.ADDED) return;
 
-  if (shouldTrackAsModification(oldValue, currentBg)) {
-    markAsModified(range, oldValue, currentBg);
-  } else if (shouldMarkAsAdded(newValue)) {
+  if (oldValue !== undefined) {
+    // 修改状态
+    const isAlreadyModified = currentBg === SHEET_CONSTANTS.COLORS.MODIFIED;
+    range.setBackground(SHEET_CONSTANTS.COLORS.MODIFIED);
+    
+    // 只在首次修改时记录基准值（异步处理）
+    if (!isAlreadyModified) {
+      recordBaseValueAsync(range, oldValue);
+    }
+  } else if (newValue && newValue.toString().trim() !== '') {
+    // 新增状态
     range.setBackground(SHEET_CONSTANTS.COLORS.ADDED);
   }
 }
 
 /**
- * 判断是否应该标记为修改
+ * 异步记录基准值（不阻塞主流程）
  */
-function shouldTrackAsModification(oldValue, currentBg) {
-  return oldValue !== undefined;
-}
-
-/**
- * 判断是否应该标记为新增
- */
-function shouldMarkAsAdded(newValue) {
-  return newValue && newValue.toString().trim() !== '';
-}
-
-/**
- * 标记单元格为修改状态并记录基准值
- */
-function markAsModified(range, oldValue, currentBg) {
-  const isAlreadyModified = currentBg === SHEET_CONSTANTS.COLORS.MODIFIED;
+function recordBaseValueAsync(range, oldValue) {
+  // 使用时间触发器异步处理注释更新
+  const trigger = ScriptApp.newTrigger('updateBaseValueNote')
+    .timeBased()
+    .after(100)
+    .create();
   
-  // 设置为修改颜色（浅蓝色）
-  range.setBackground(SHEET_CONSTANTS.COLORS.MODIFIED);
+  // 存储参数
+  const params = {
+    sheetName: range.getSheet().getName(),
+    row: range.getRow(),
+    column: range.getColumn(),
+    baseValue: oldValue.toString(),
+    triggerId: trigger.getUniqueId()
+  };
   
-  // 只在首次修改时记录基准值
-  if (!isAlreadyModified) {
-    recordBaseValue(range, oldValue);
-  }
-}
-
-/**
- * 记录基准值到注释中
- */
-function recordBaseValue(range, oldValue) {
-  // 保持原始值的格式
-  let baseValue = oldValue;
-  if (Number.isInteger(Number(oldValue))) {
-    baseValue = parseInt(oldValue, 10);
-  }
-  
-  // 添加基准值到系统注释，保留用户原有注释
-  const note = range.getNote();
-  const newNote = NoteManager.addSystemNote(
-    note,
-    NOTE_CONSTANTS.TYPES.BASE_VALUE,
-    baseValue.toString()
+  PropertiesService.getScriptProperties().setProperty(
+    `base_value_${trigger.getUniqueId()}`, 
+    JSON.stringify(params)
   );
-  range.setNote(newNote);
 }
 
 /**
- * 处理ID冲突检查
+ * 延迟执行的基准值注释更新
  */
-function handleIdConflictCheck(context) {
-  const { headerRow, range } = context;
-  const idColumns = findIdColumns(headerRow);
+function updateBaseValueNote() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const currentTrigger = triggers.find(t => t.getHandlerFunction() === 'updateBaseValueNote');
   
-  if (idColumns.length === 0) return;
+  if (!currentTrigger) return;
   
-  const editedColumns = getEditedColumns(range);
-  const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
-  
-  if (relevantIdColumns.length === 0) return;
-  
-  // 设置延迟确保值已更新
-  Utilities.sleep(100);
-  
-  // 检查相关ID列的冲突
-  checkRelevantIdColumns(context, relevantIdColumns);
-}
-
-/**
- * 查找所有ID列
- */
-function findIdColumns(headerRow) {
-  const idColumns = [];
-  for (let col = 1; col <= headerRow.length; col++) {
-    const header = headerRow[col-1];
-    if (header && header.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
-      idColumns.push(col);
+  try {
+    const paramsJson = PropertiesService.getScriptProperties()
+      .getProperty(`base_value_${currentTrigger.getUniqueId()}`);
+    
+    if (paramsJson) {
+      const params = JSON.parse(paramsJson);
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(params.sheetName);
+      const range = sheet.getRange(params.row, params.column);
+      
+      const note = range.getNote();
+      const newNote = NoteManager.addSystemNote(
+        note,
+        NOTE_CONSTANTS.TYPES.BASE_VALUE,
+        params.baseValue
+      );
+      range.setNote(newNote);
+      
+      // 清理
+      PropertiesService.getScriptProperties().deleteProperty(`base_value_${currentTrigger.getUniqueId()}`);
     }
+  } catch (error) {
+    console.error('更新基准值注释失败:', error);
+  } finally {
+    // 删除触发器
+    ScriptApp.deleteTrigger(currentTrigger);
   }
-  return idColumns;
 }
 
 /**
@@ -244,17 +269,104 @@ function getEditedColumns(range) {
 }
 
 /**
- * 检查相关ID列的冲突
+ * 优化的ID冲突检查处理
  */
-function checkRelevantIdColumns(context, relevantIdColumns) {
+function handleIdConflictCheckOptimized(context) {
+  const { headerRow, range } = context;
+  const idColumns = findIdColumnsOptimized(headerRow);
+  
+  if (idColumns.length === 0) return;
+  
+  const editedColumns = getEditedColumns(range);
+  const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
+  
+  if (relevantIdColumns.length === 0) return;
+  
+  // 移除不必要的延迟
+  // Utilities.sleep(100); // 删除这行
+  
+  // 直接检查，不再循环
+  checkRelevantIdColumnsOptimized(context, relevantIdColumns);
+}
+
+/**
+ * 优化的ID列查找
+ */
+function findIdColumnsOptimized(headerRow) {
+  const idColumns = [];
+  const suffix = ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX;
+  
+  for (let col = 0; col < headerRow.length; col++) {
+    const header = headerRow[col];
+    if (header && header.toString().endsWith(suffix)) {
+      idColumns.push(col + 1);
+    }
+  }
+  
+  return idColumns;
+}
+
+/**
+ * 优化的相关ID列检查
+ */
+function checkRelevantIdColumnsOptimized(context, relevantIdColumns) {
   const { sheet, range } = context;
   
+  // 批量处理所有ID列，而不是逐个处理
   for (const idCol of relevantIdColumns) {
     const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
-    checkIdConflicts({
+    checkIdConflictsOptimized({
       sheet: sheet,
       range: idRange
     });
+  }
+}
+
+/**
+ * 优化的ID冲突检查入口
+ */
+function checkIdConflictsOptimized(editedCell) {
+  const { sheet, range } = editedCell;
+  const value = range.getValue();
+  
+  if (!value) {
+    // 快速清理
+    range.setBackground(null);
+    NoteManager.removeMarkFromCell(range, NOTE_CONSTANTS.TYPES.CONFLICT);
+    return;
+  }
+  
+  // 先移除历史标记
+  NoteManager.removeMarkFromCell(range, NOTE_CONSTANTS.TYPES.CONFLICT);
+
+  const headerValue = sheet.getRange(1, range.getColumn()).getValue();
+  
+  try {
+    const conflicts = checkSingleIdConflictImproved({
+      value,
+      sheet: sheet.getName(),
+      row: range.getRow(),
+      column: range.getColumn(),
+      columnName: headerValue
+    });
+    
+    if (conflicts.length > 0) {
+      const conflictLocations = conflicts.map(loc => `${loc.sheet} 第${loc.row}行`).join('\n');
+      const userNote = `在以下位置重复:\n${conflictLocations}`;
+      
+      // 批量设置背景和注释
+      range.setBackground(ID_CHECKER_CONFIG.COLORS.CONFLICT);
+      range.setNote(NoteManager.addSystemNote(
+        null,
+        NOTE_CONSTANTS.TYPES.CONFLICT,
+        userNote
+      ));
+      
+      SpreadsheetApp.getActiveSpreadsheet().toast('发现ID冲突，已用红色标记。', '警告', 3);
+    }
+  } catch (error) {
+    console.error('ID冲突检查异常:', error);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`ID冲突检查出现错误: ${error.message}`, '错误', 5);
   }
 }
 
