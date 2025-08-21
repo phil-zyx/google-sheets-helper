@@ -89,7 +89,7 @@ function onOpen(e) {
       // .addItem('合并表格', 'showMergeDialog')
       .addItem('配置表检查(开发中)', 'checkConfigTable')  // 新增配置检查功能
       .addItem('清除所有标记', 'clearAllMarks')
-      .addItem('更新冲突标记', 'validateAndClearConflictMarks')  // 🆕 新增手动清理功能
+      .addItem('手动更新冲突标记', 'validateAndClearConflictMarks')  // 🆕 新增手动清理功能
       .addItem('刷新触发器', 'createEditTrigger')
       .addToUi();
   } catch (error) {
@@ -105,10 +105,10 @@ function onEditHandler(e) {
   
   try {
     // 快速预检查：是否需要处理
-    if (!quickPreCheck(e)) {
-      console.log(`⚡ [快速退出] 无需处理 - 耗时: ${Date.now() - startTime}ms`);
-      return;
-    }
+    // if (!quickPreCheck(e)) {
+    //  console.log(`⚡ [快速退出] 无需处理 - 耗时: ${Date.now() - startTime}ms`);
+    //  return;
+    // }
     
     const context = createEditContextOptimized(e);
     if (!context.hasIdColumn) {
