@@ -118,7 +118,7 @@ function onEditHandler(e) {
 
     // 并行处理值追踪和ID冲突检查
     handleValueTrackingOptimized(context);
-    handleIdConflictCheckOptimized(context);
+    handleIdConflictCheck(context);
     
     console.log(`✅ [触发器完成] 总耗时: ${Date.now() - startTime}ms`);
   } catch (error) {
@@ -266,108 +266,6 @@ function getEditedColumns(range) {
   const editedColStart = range.getColumn();
   const editedColEnd = editedColStart + range.getNumColumns() - 1;
   return Array.from({ length: editedColEnd - editedColStart + 1 }, (_, i) => editedColStart + i);
-}
-
-/**
- * 优化的ID冲突检查处理
- */
-function handleIdConflictCheckOptimized(context) {
-  const { headerRow, range } = context;
-  const idColumns = findIdColumnsOptimized(headerRow);
-  
-  if (idColumns.length === 0) return;
-  
-  const editedColumns = getEditedColumns(range);
-  const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
-  
-  if (relevantIdColumns.length === 0) return;
-  
-  // 移除不必要的延迟
-  // Utilities.sleep(100); // 删除这行
-  
-  // 直接检查，不再循环
-  checkRelevantIdColumnsOptimized(context, relevantIdColumns);
-}
-
-/**
- * 优化的ID列查找
- */
-function findIdColumnsOptimized(headerRow) {
-  const idColumns = [];
-  const suffix = ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX;
-  
-  for (let col = 0; col < headerRow.length; col++) {
-    const header = headerRow[col];
-    if (header && header.toString().endsWith(suffix)) {
-      idColumns.push(col + 1);
-    }
-  }
-  
-  return idColumns;
-}
-
-/**
- * 优化的相关ID列检查
- */
-function checkRelevantIdColumnsOptimized(context, relevantIdColumns) {
-  const { sheet, range } = context;
-  
-  // 批量处理所有ID列，而不是逐个处理
-  for (const idCol of relevantIdColumns) {
-    const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
-    checkIdConflictsOptimized({
-      sheet: sheet,
-      range: idRange
-    });
-  }
-}
-
-/**
- * 优化的ID冲突检查入口
- */
-function checkIdConflictsOptimized(editedCell) {
-  const { sheet, range } = editedCell;
-  const value = range.getValue();
-  
-  if (!value) {
-    // 快速清理
-    range.setBackground(null);
-    NoteManager.removeMarkFromCell(range, NOTE_CONSTANTS.TYPES.CONFLICT);
-    return;
-  }
-  
-  // 先移除历史标记
-  NoteManager.removeMarkFromCell(range, NOTE_CONSTANTS.TYPES.CONFLICT);
-
-  const headerValue = sheet.getRange(1, range.getColumn()).getValue();
-  
-  try {
-    const conflicts = checkSingleIdConflictImproved({
-      value,
-      sheet: sheet.getName(),
-      row: range.getRow(),
-      column: range.getColumn(),
-      columnName: headerValue
-    });
-    
-    if (conflicts.length > 0) {
-      const conflictLocations = conflicts.map(loc => `${loc.sheet} 第${loc.row}行`).join('\n');
-      const userNote = `在以下位置重复:\n${conflictLocations}`;
-      
-      // 批量设置背景和注释
-      range.setBackground(ID_CHECKER_CONFIG.COLORS.CONFLICT);
-      range.setNote(NoteManager.addSystemNote(
-        null,
-        NOTE_CONSTANTS.TYPES.CONFLICT,
-        userNote
-      ));
-      
-      SpreadsheetApp.getActiveSpreadsheet().toast('发现ID冲突，已用红色标记。', '警告', 3);
-    }
-  } catch (error) {
-    console.error('ID冲突检查异常:', error);
-    SpreadsheetApp.getActiveSpreadsheet().toast(`ID冲突检查出现错误: ${error.message}`, '错误', 5);
-  }
 }
 
 /**

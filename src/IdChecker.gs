@@ -70,6 +70,56 @@ const BATCH_CHECKER_CONFIG = {
 // ============================================================================
 
 /**
+ * ID冲突检查
+ */
+function handleIdConflictCheck(context) {
+  const { headerRow, range } = context;
+  const idColumns = findIdColumns(headerRow);
+  
+  if (idColumns.length === 0) return;
+  
+  const editedColumns = getEditedColumns(range);
+  const relevantIdColumns = idColumns.filter(idCol => editedColumns.includes(idCol));
+  
+  if (relevantIdColumns.length === 0) return;
+  
+  checkRelevantIdColumns(context, relevantIdColumns);
+}
+
+/**
+ * 优化的ID列查找
+ */
+function findIdColumns(headerRow) {
+  const idColumns = [];
+  const suffix = ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX;
+  
+  for (let col = 0; col < headerRow.length; col++) {
+    const header = headerRow[col];
+    if (header && header.toString().endsWith(suffix)) {
+      idColumns.push(col + 1);
+    }
+  }
+  
+  return idColumns;
+}
+
+/**
+ * 优化的相关ID列检查
+ */
+function checkRelevantIdColumns(context, relevantIdColumns) {
+  const { sheet, range } = context;
+  
+  // 批量处理所有ID列，而不是逐个处理
+  for (const idCol of relevantIdColumns) {
+    const idRange = sheet.getRange(range.getRow(), idCol, range.getNumRows(), 1);
+    checkIdConflicts({
+      sheet: sheet,
+      range: idRange
+    });
+  }
+}
+
+/**
  * 单次ID冲突检查 - 用于实时编辑检测
  * @param {Object} params - 检查参数
  * @param {string} params.value - 要检查的ID值
@@ -80,7 +130,7 @@ const BATCH_CHECKER_CONFIG = {
  * @param {boolean} params.useSingleRowOptimization - 是否使用单行优化检查（默认true）
  * @returns {Array} 冲突位置数组
  */
-function checkSingleIdConflictImproved({ value, sheet: sheetName, row, column, columnName, useSingleRowOptimization = true }) {
+function checkSingleIdConflict({ value, sheet: sheetName, row, column, columnName, useSingleRowOptimization = true }) {
   const startTime = Date.now();
   console.log(`🔍 [单次检查] ${sheetName} 第${row}行 - "${value}"`);
   
@@ -1832,7 +1882,7 @@ function recheckCellConflictStatusCurrentSheet(cellRange, sheetName) {
   console.log(`🔍 [重检查] 开始检查单元格冲突状态 - 值: "${value}", 列标题: "${headerValue}"`);
   
   // 使用现有的冲突检查逻辑
-  const conflicts = checkSingleIdConflictImproved({
+  const conflicts = checkSingleIdConflict({
     value: value,
     sheet: sheetName,
     row: cellRange.getRow(),
@@ -1945,7 +1995,7 @@ function checkIdConflicts(editedCell) {
   console.log(`📋 [列标题] "${headerValue}"`);
   
   try {
-    const conflicts = checkSingleIdConflictImproved({
+    const conflicts = checkSingleIdConflict({
       value,
       sheet: sheet.getName(),
       row: range.getRow(),
@@ -2889,199 +2939,3 @@ function generateMemoryRecommendations(testResults) {
   
   return recommendations;
 }
-
-// ============================================================================
-// 代码结构说明 - 优化部分整理
-// ============================================================================
-
-/**
- * 🚀 批量检查优化代码结构说明
- * 
- * 本文件实现了三种不同级别的ID冲突检查优化：
- * 
- * 1. 传统检查方式 (checkOtherSheetsConflict)
- *    - 逐个表格检查，逐个读取数据
- *    - 适合表格数量少的情况
- *    - 实现简单，内存占用小
- * 
- * 2. 批量检查方式 (checkOtherSheetsConflictBatch)
- *    - 批量预加载ID列数据
- *    - 一次性读取冲突行数据
- *    - 适合中等规模数据
- *    - 性能提升3-5倍
- * 
- * 3. 单行优化检查方式 (checkOtherSheetsConflictSingleRowOptimized)
- *    - 一次性读取所有跨页签数据
- *    - 智能内存管理和分批处理
- *    - 适合大规模数据
- *    - 性能提升5-10倍
- * 
- * 核心优化策略：
- * 
- * A. 数据预加载优化
- *    - buildSheetIdDataCache(): 批量预加载所有表格的ID列数据
- *    - findPotentialConflicts(): 快速查找潜在冲突位置
- * 
- * B. 批量读取优化
- *    - batchReadConflictRowsData(): 批量读取冲突行数据
- *    - readAllCrossSheetConflictRows(): 一次性读取所有跨页签数据
- * 
- * C. 内存管理优化
- *    - shouldUseBatchProcessing(): 智能判断是否需要分批处理
- *    - readSheetRowsInBatches(): 分批读取表格行数据
- *    - readAllCrossSheetConflictRowsBatched(): 分批处理跨页签数据
- * 
- * D. 数据验证优化
- *    - validateAllConflicts(): 批量验证所有冲突行
- *    - validateAllConflictsOptimized(): 优化版本的数据验证
- * 
- * E. 辅助函数优化
- *    - groupConflictsBySheet(): 按表格分组冲突
- *    - calculateRowCount(): 计算需要读取的行数
- *    - readSheetRowsOptimized(): 优化读取表格行数据
- *    - getSheetHeaders(): 获取表格表头
- *    - mapRowsDataToConflicts(): 映射行数据到冲突位置
- *    - mapRowsDataWithHeaders(): 映射行数据和表头到冲突位置
- * 
- * 智能选择机制：
- * 
- * - checkOtherSheetsConflictSmart(): 根据表格数量智能选择检查方式
- * - checkOtherSheetsConflictSingleRowSmart(): 针对单行编辑的智能选择
- * 
- * 性能测试工具：
- * 
- * - performanceTestIdChecker(): 测试单个ID检查的性能
- * - batchPerformanceTest(): 批量测试多个用例的性能
- * - singleRowPerformanceTest(): 单行编辑检查性能测试
- * - performanceComparisonTest(): 性能对比测试
- * - quickPerformanceTest(): 快速性能测试
- * 
- * 内存管理工具：
- * 
- * - monitorMemoryUsage(): 监控内存使用情况
- * - adjustMemoryManagementConfig(): 动态调整内存管理配置
- * - memoryStressTest(): 内存压力测试
- * - generateMockConflicts(): 生成模拟冲突数据
- * - generateMemoryRecommendations(): 生成内存优化建议
- * 
- * 使用建议：
- * 
- * 1. 对于日常使用，推荐使用 checkSingleIdConflictImproved() 函数
- *    系统会自动选择最优的检查方式
- * 
- * 2. 对于性能要求高的场景，可以手动选择：
- *    - 表格数量 ≤ 3个：使用 checkOtherSheetsConflict()
- *    - 表格数量 4-5个：使用 checkOtherSheetsConflictBatch()
- *    - 表格数量 > 5个：使用 checkOtherSheetsConflictSingleRowOptimized()
- * 
- * 3. 对于大量数据处理，系统会自动启用内存管理：
- *    - 自动分批处理
- *    - 内存使用监控
- *    - 配置参数优化
- * 
- * 4. 定期使用性能测试工具监控系统性能：
- *    - 对比不同检查方式的性能
- *    - 监控内存使用情况
- *    - 根据测试结果调整配置
- * 
- * 配置说明：
- * 
- * BATCH_CHECKER_CONFIG 常量控制所有优化行为：
- * - SHEET_COUNT_THRESHOLD: 智能选择阈值
- * - CONFLICT_CELL_THRESHOLD: 批量验证阈值
- * - SUPER_BATCH_THRESHOLD: 超级批量验证阈值
- * - MEMORY_MANAGEMENT: 内存管理配置
- * 
- * 这些配置可以根据实际使用情况动态调整，
- * 系统也会根据内存使用情况自动优化参数。
- */
-
-/**
- * 简单测试函数 - 验证修复后的代码是否正常工作
- * @returns {Object} 测试结果
- */
-function testOptimizedCode() {
-  console.log(`🧪 [测试] 开始测试优化后的代码是否正常工作`);
-  
-  const testResults = {
-    success: true,
-    errors: [],
-    functions: []
-  };
-  
-  try {
-    // 测试1：检查关键函数是否存在
-    const requiredFunctions = [
-      'shouldUseBatchProcessing',
-      'readSheetRowsInBatches',
-      'readAllCrossSheetConflictRowsBatched',
-      'groupConflictsBySheet',
-      'calculateRowCount',
-      'readSheetRowsOptimized',
-      'getSheetHeaders',
-      'mapRowsDataToConflicts',
-      'mapRowsDataWithHeaders',
-      'validateAllConflicts',
-      'validateAllConflictsOptimized'
-    ];
-    
-    for (const funcName of requiredFunctions) {
-      if (typeof globalThis[funcName] === 'function') {
-        testResults.functions.push(`${funcName}: ✅ 存在`);
-      } else {
-        testResults.functions.push(`${funcName}: ❌ 缺失`);
-        testResults.success = false;
-        testResults.errors.push(`函数 ${funcName} 未定义`);
-      }
-    }
-    
-    // 测试2：检查配置是否存在
-    if (typeof BATCH_CHECKER_CONFIG !== 'undefined') {
-      testResults.functions.push('BATCH_CHECKER_CONFIG: ✅ 存在');
-    } else {
-      testResults.functions.push('BATCH_CHECKER_CONFIG: ❌ 缺失');
-      testResults.success = false;
-      testResults.errors.push('配置常量 BATCH_CHECKER_CONFIG 未定义');
-    }
-    
-    // 测试3：检查内存管理配置
-    if (BATCH_CHECKER_CONFIG && BATCH_CHECKER_CONFIG.MEMORY_MANAGEMENT) {
-      testResults.functions.push('MEMORY_MANAGEMENT: ✅ 存在');
-    } else {
-      testResults.functions.push('MEMORY_MANAGEMENT: ❌ 缺失');
-      testResults.success = false;
-      testResults.errors.push('内存管理配置缺失');
-    }
-    
-    console.log(`🧪 [测试完成] 测试结果:`, testResults);
-    
-    // 显示测试结果给用户
-    if (testResults.success) {
-      SpreadsheetApp.getActiveSpreadsheet().toast(
-        '✅ 优化代码测试通过！所有函数都已正确定义。',
-        '测试成功',
-        5
-      );
-    } else {
-      SpreadsheetApp.getActiveSpreadsheet().toast(
-        `❌ 测试失败！发现 ${testResults.errors.length} 个问题。`,
-        '测试失败',
-        8
-      );
-    }
-    
-  } catch (error) {
-    console.error(`💥 [测试异常] 测试过程中出现错误:`, error);
-    testResults.success = false;
-    testResults.errors.push(`测试异常: ${error.message}`);
-    
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      `💥 测试异常: ${error.message}`,
-      '测试错误',
-      5
-    );
-  }
-  
-  return testResults;
-}
-
