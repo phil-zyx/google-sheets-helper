@@ -1,14 +1,498 @@
 /**
- * Google Sheets ID Conflict Checker - Refactored Version
- * Provides efficient ID conflict detection, validation, and cleanup.
- * This version is refactored to reduce redundancy and improve maintainability
- * by using a unified data processing pipeline.
- *
+ * Google Sheets ID Conflict Checker 
  * Core Principles:
  * 1. Unified Pipeline: All checks (real-time, batch) use the same core logic.
  * 2. Batch Everything: All reads and writes to the spreadsheet are batched to minimize API calls.
  * 3. Separation of Concerns: Logic is split into Data Loading, In-Memory Validation, and Sheet Updating.
  */
+
+/**
+ * Global cache for sheet headers to avoid repeated API calls
+ */
+const HEADER_CACHE = new Map();
+
+/**
+ * Global cache for sheet dimensions to avoid repeated getLastRow/getLastColumn calls
+ */
+const DIMENSION_CACHE = new Map();
+
+/**
+ * sheet data reader that minimizes API calls
+ * @param {Sheet} sheet - The sheet to read data from
+ * @returns {Object} All necessary sheet data in one operation
+ */
+function readSheetData(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`📊 开始读取表格: ${sheetName}`);
+  
+  try {
+    // Use getDataRange() to automatically get the data bounds - single API call
+    const dataRange = sheet.getDataRange();
+    const startTime = new Date().getTime();
+    
+    // Batch read all data in one operation - 4 API calls instead of multiple
+    const [values, notes, backgrounds] = [
+      dataRange.getValues(),
+      dataRange.getNotes(),
+      dataRange.getBackgrounds()
+    ];
+    
+    const readTime = new Date().getTime() - startTime;
+    console.log(`⚡ [数据读取] ${sheetName}: ${values.length}行 × ${values[0]?.length || 0}列, 耗时: ${readTime}ms`);
+    
+    // Cache dimensions for future use
+    const dimensions = {
+      lastRow: dataRange.getLastRow(),
+      lastColumn: dataRange.getLastColumn()
+    };
+    DIMENSION_CACHE.set(sheetName, dimensions);
+    
+    // Cache headers for future use
+    if (values.length > 0) {
+      HEADER_CACHE.set(sheetName, values[0]);
+    }
+    
+    return {
+      values,
+      notes,
+      backgrounds,
+      lastRow: dimensions.lastRow,
+      lastColumn: dimensions.lastColumn,
+      headers: values[0] || [],
+      sheetName
+    };
+  } catch (error) {
+    console.error(`❌ [优化读取失败] ${sheetName}: ${error.message}`);
+    // Fallback to traditional method
+    return readSheetDataFallback(sheet);
+  }
+}
+
+/**
+ * Fallback method for sheet data reading when optimization fails
+ * @param {Sheet} sheet - The sheet to read data from
+ * @returns {Object} Sheet data using traditional methods
+ */
+function readSheetDataFallback(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`⚠️ [回退读取] 使用传统方法读取: ${sheetName}`);
+  
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  
+  if (lastRow <= 1 || lastColumn === 0) {
+    return {
+      values: [],
+      notes: [],
+      backgrounds: [],
+      lastRow: 0,
+      lastColumn: 0,
+      headers: [],
+      sheetName
+    };
+  }
+  
+  const range = sheet.getRange(1, 1, lastRow, lastColumn);
+  return {
+    values: range.getValues(),
+    notes: range.getNotes(),
+    backgrounds: range.getBackgrounds(),
+    lastRow,
+    lastColumn,
+    headers: sheet.getRange(1, 1, 1, lastColumn).getValues()[0],
+    sheetName
+  };
+}
+
+/**
+ * Get sheet headers with caching to avoid repeated API calls
+ * @param {Sheet} sheet - The sheet to get headers from
+ * @returns {Array} Array of header values
+ */
+function getSheetHeadersCached(sheet) {
+  const sheetName = sheet.getName();
+  
+  if (!HEADER_CACHE.has(sheetName)) {
+    console.log(`📝 [表头缓存] 首次读取表头: ${sheetName}`);
+    const lastCol = sheet.getLastColumn();
+    if (lastCol > 0) {
+      const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      HEADER_CACHE.set(sheetName, headers);
+    } else {
+      HEADER_CACHE.set(sheetName, []);
+    }
+  }
+  
+  return HEADER_CACHE.get(sheetName);
+}
+
+/**
+ * Get sheet dimensions with caching to avoid repeated API calls
+ * @param {Sheet} sheet - The sheet to get dimensions from
+ * @returns {Object} Object with lastRow and lastColumn
+ */
+function getSheetDimensionsCached(sheet) {
+  const sheetName = sheet.getName();
+  
+  if (!DIMENSION_CACHE.has(sheetName)) {
+    console.log(`📏 [尺寸缓存] 首次读取尺寸: ${sheetName}`);
+    const dimensions = {
+      lastRow: sheet.getLastRow(),
+      lastColumn: sheet.getLastColumn()
+    };
+    DIMENSION_CACHE.set(sheetName, dimensions);
+  }
+  
+  return DIMENSION_CACHE.get(sheetName);
+}
+
+/**
+ * Optimized batch update using getRangeList for multiple non-contiguous cells
+ * @param {Sheet} sheet - The sheet to update
+ * @param {Array} updates - Array of update objects with row, col, and properties
+ * @returns {Object} Update statistics
+ */
+function batchUpdateCells(sheet, updates) {
+  if (updates.length === 0) {
+    return { success: true, updatedCount: 0, message: "没有需要更新的单元格" };
+  }
+  
+  const sheetName = sheet.getName();
+  console.log(`🚀 [批量更新]: ${sheetName}, 共${updates.length}个单元格`);
+  
+  const startTime = new Date().getTime();
+  let successCount = 0;
+  let errorCount = 0;
+  
+  try {
+    // Group updates by operation type for batch processing
+    const updatesByType = groupUpdatesByType(updates);
+    
+    // 使用 Set 来跟踪实际更新的单元格，避免重复计算
+    const updatedCells = new Set();
+    
+    // Process background updates in batch
+    if (updatesByType.backgrounds.length > 0) {
+      const bgResult = batchUpdateBackgrounds(sheet, updatesByType.backgrounds);
+      // 记录成功更新的单元格
+      bgResult.successCells.forEach(cell => updatedCells.add(`${cell.row}-${cell.col}`));
+      errorCount += bgResult.errorCount;
+    }
+    
+    // Process note updates in batch
+    if (updatesByType.notes.length > 0) {
+      const noteResult = batchUpdateNotes(sheet, updatesByType.notes);
+      // 记录成功更新的单元格
+      noteResult.successCells.forEach(cell => updatedCells.add(`${cell.row}-${cell.col}`));
+      errorCount += noteResult.errorCount;
+    }
+    
+    // 返回实际更新的单元格数量，而不是操作次数
+    const actualUpdatedCount = updatedCells.size;
+    
+    const duration = new Date().getTime() - startTime;
+    console.log(`✅ [批量更新完成] ${sheetName}: 成功${actualUpdatedCount}个单元格, 失败${errorCount}个, 耗时: ${duration}ms`);
+    
+    return {
+      success: true,
+      updatedCount: actualUpdatedCount,  // 这里返回实际的单元格数量
+      errorCount,
+      duration,
+      message: `批量更新完成: 成功${actualUpdatedCount}个单元格, 失败${errorCount}个`
+    };
+    
+  } catch (error) {
+    console.error(`❌ [批量更新异常] ${sheetName}: ${error.message}`);
+    // Fallback to individual updates
+    return batchUpdateCellsFallback(sheet, updates);
+  }
+}
+
+/**
+ * Group updates by operation type for efficient batch processing
+ * @param {Array} updates - Array of update objects
+ * @returns {Object} Grouped updates by type
+ */
+function groupUpdatesByType(updates) {
+  const grouped = {
+    backgrounds: [],
+    notes: []
+  };
+  
+  updates.forEach(update => {
+    if (update.background !== undefined) {
+      grouped.backgrounds.push(update);
+    }
+    if (update.note !== undefined) {
+      grouped.notes.push(update);
+    }
+  });
+  
+  return grouped;
+}
+
+/**
+ * background updates using contiguous ranges
+ * @param {Sheet} sheet - The sheet to update
+ * @param {Array} backgroundUpdates - Array of background update objects
+ * @returns {Object} Update result
+ */
+function batchUpdateBackgrounds(sheet, backgroundUpdates) {
+  try {
+    console.log(`🎨 [背景更新] 开始处理 ${backgroundUpdates.length} 个背景更新`);
+    
+    // Sort updates by row and column for better batching
+    const sortedUpdates = [...backgroundUpdates].sort((a, b) => {
+      if (a.row !== b.row) return a.row - b.row;
+      return a.col - b.col;
+    });
+    
+    let successCount = 0;
+    let errorCount = 0;
+    const successCells = []; // 新增：记录成功更新的单元格
+    
+    // Group updates into contiguous ranges for batch processing
+    let currentRange = null;
+    const ranges = [];
+    
+    for (const update of sortedUpdates) {
+      if (!currentRange) {
+        currentRange = {
+          startRow: update.row,
+          endRow: update.row,
+          startCol: update.col,
+          endCol: update.col,
+          background: update.background,
+          updates: [update]
+        };
+      } else if (
+        update.row === currentRange.endRow &&
+        update.col === currentRange.endCol + 1 &&
+        update.background === currentRange.background
+      ) {
+        // Extend current range horizontally
+        currentRange.endCol = update.col;
+        currentRange.updates.push(update);
+      } else if (
+        update.row === currentRange.endRow + 1 &&
+        update.col === currentRange.startCol &&
+        update.background === currentRange.background
+      ) {
+        // Extend current range vertically
+        currentRange.endRow = update.row;
+        currentRange.updates.push(update);
+      } else {
+        // Start new range
+        ranges.push(currentRange);
+        currentRange = {
+          startRow: update.row,
+          endRow: update.row,
+          startCol: update.col,
+          endCol: update.col,
+          background: update.background,
+          updates: [update]
+        };
+      }
+    }
+    
+    // Add the last range
+    if (currentRange) {
+      ranges.push(currentRange);
+    }
+    
+    console.log(`📊 [范围分组] 将 ${backgroundUpdates.length} 个更新分组为 ${ranges.length} 个连续范围`);
+    
+    // Process each range in batch
+    for (const range of ranges) {
+      try {
+        const numRows = range.endRow - range.startRow + 1;
+        const numCols = range.endCol - range.startCol + 1;
+        
+        // Use single API call for each contiguous range
+        const sheetRange = sheet.getRange(range.startRow, range.startCol, numRows, numCols);
+        sheetRange.setBackground(range.background);
+        
+        // 记录成功更新的单元格
+        range.updates.forEach(update => {
+          successCells.push({ row: update.row, col: update.col });
+        });
+        
+        successCount += range.updates.length;
+      } catch (err) {
+        console.error(`❌ [范围更新失败] 行${range.startRow}-${range.endRow}, 列${range.startCol}-${range.endCol}: ${err.message}`);
+        errorCount += range.updates.length;
+      }
+    }
+    
+    console.log(`🎨 [背景更新完成] 成功: ${successCount}个, 失败: ${errorCount}个`);
+    return { successCells, errorCount }; // 修改返回值结构
+    
+  } catch (error) {
+    console.error(`❌ [背景更新失败]: ${error.message}`);
+    return { successCells: [], errorCount: backgroundUpdates.length };
+  }
+}
+
+/**
+ * batch note updates using contiguous ranges
+ * @param {Sheet} sheet - The sheet to update
+ * @param {Array} noteUpdates - Array of note update objects
+ * @returns {Object} Update result
+ */
+function batchUpdateNotes(sheet, noteUpdates) {
+  try {
+    console.log(`📝 [注释更新] 开始处理 ${noteUpdates.length} 个注释更新`);
+    
+    // Sort updates by row and column for better batching
+    const sortedUpdates = [...noteUpdates].sort((a, b) => {
+      if (a.row !== b.row) return a.row - b.row;
+      return a.col - b.col;
+    });
+    
+    let successCount = 0;
+    let errorCount = 0;
+    const successCells = []; // 新增：记录成功更新的单元格
+    
+    // Group updates into contiguous ranges for batch processing
+    let currentRange = null;
+    const ranges = [];
+    
+    for (const update of sortedUpdates) {
+      if (!currentRange) {
+        currentRange = {
+          startRow: update.row,
+          endRow: update.row,
+          startCol: update.col,
+          endCol: update.col,
+          notes: [update.note],
+          updates: [update]
+        };
+      } else if (
+        update.row === currentRange.endRow &&
+        update.col === currentRange.endCol + 1
+      ) {
+        // Extend current range horizontally
+        currentRange.endCol = update.col;
+        currentRange.notes.push(update.note);
+        currentRange.updates.push(update);
+      } else if (
+        update.row === currentRange.endRow + 1 &&
+        update.col === currentRange.startCol
+      ) {
+        // Extend current range vertically
+        currentRange.endRow = update.row;
+        currentRange.notes.push(update.note);
+        currentRange.updates.push(update);
+      } else {
+        // Start new range
+        ranges.push(currentRange);
+        currentRange = {
+          startRow: update.row,
+          endRow: update.row,
+          startCol: update.col,
+          endCol: update.col,
+          notes: [update.note],
+          updates: [update]
+        };
+      }
+    }
+    
+    // Add the last range
+    if (currentRange) {
+      ranges.push(currentRange);
+    }
+    
+    console.log(`📊 [范围分组] 将 ${noteUpdates.length} 个更新分组为 ${ranges.length} 个连续范围`);
+    
+    // Process each range in batch
+    for (const range of ranges) {
+      try {
+        const numRows = range.endRow - range.startRow + 1;
+        const numCols = range.endCol - range.startCol + 1;
+        
+        // Use single API call for each contiguous range
+        const sheetRange = sheet.getRange(range.startRow, range.startCol, numRows, numCols);
+        
+        // Create 2D array for notes
+        const notesArray = [];
+        for (let row = 0; row < numRows; row++) {
+          const rowNotes = [];
+          for (let col = 0; col < numCols; col++) {
+            const index = row * numCols + col;
+            rowNotes.push(range.notes[index] || '');
+          }
+          notesArray.push(rowNotes);
+        }
+        
+        sheetRange.setNotes(notesArray);
+        
+        // 记录成功更新的单元格
+        range.updates.forEach(update => {
+          successCells.push({ row: update.row, col: update.col });
+        });
+        
+        successCount += range.updates.length;
+      } catch (err) {
+        console.error(`❌ [范围更新失败] 行${range.startRow}-${range.endRow}, 列${range.startCol}-${range.endCol}: ${err.message}`);
+        errorCount += range.updates.length;
+      }
+    }
+    
+    console.log(`📝 [注释更新完成] 成功: ${successCount}个, 失败: ${errorCount}个`);
+    return { successCells, errorCount }; // 修改返回值结构
+    
+  } catch (error) {
+    console.error(`❌ [注释更新失败]: ${error.message}`);
+    return { successCells: [], errorCount: noteUpdates.length };
+  }
+}
+
+/**
+ * Fallback method for batch updates when optimization fails
+ * @param {Sheet} sheet - The sheet to update
+ * @param {Array} updates - Array of update objects
+ * @returns {Object} Update result using individual operations
+ */
+function batchUpdateCellsFallback(sheet, updates) {
+  console.log(`⚠️ [回退更新] 使用传统方法更新: ${sheet.getName()}`);
+  
+  let successCount = 0;
+  let errorCount = 0;
+  
+  for (const update of updates) {
+    try {
+      const range = sheet.getRange(update.row, update.col);
+      
+      if (update.background !== undefined) {
+        range.setBackground(update.background);
+      }
+      if (update.note !== undefined) {
+        range.setNote(update.note);
+      }
+      
+      successCount++;
+    } catch (error) {
+      console.error(`❌ [单个更新失败] 行${update.row}列${update.col}: ${error.message}`);
+      errorCount++;
+    }
+  }
+  
+  return {
+    success: true,
+    updatedCount: successCount,
+    errorCount,
+    message: `回退更新完成: 成功${successCount}个, 失败${errorCount}个`
+  };
+}
+
+/**
+ * Clear all caches to free memory
+ */
+function clearAllCaches() {
+  HEADER_CACHE.clear();
+  DIMENSION_CACHE.clear();
+  console.log(`🧹 [缓存清理] 所有缓存已清理`);
+}
 
 // ============================================================================ 
 // Public API / Entry Points (Hooks for Google Sheets)
@@ -61,6 +545,64 @@ function findIdColumns(headerRow) {
 }
 
 /**
+ * 🚀 PHASE 1 OPTIMIZATION: Improved ID column detection with strict matching
+ * This function ensures only columns that EXACTLY end with '_INT_id' are considered ID columns
+ */
+function findIdColumnsStrict(headerRow) {
+  const idColumns = [];
+  const suffix = ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX;
+  if (!suffix) return [];
+
+  for (let col = 0; col < headerRow.length; col++) {
+    const header = headerRow[col];
+    if (header && typeof header === 'string') {
+      const headerStr = header.toString().trim();
+      
+      // Strict matching: must end with '_INT_id' and not contain '_INT_' in the middle
+      if (headerStr.endsWith(suffix)) {
+        // Additional check: ensure it's not a false positive like 'A_INT_base_activity_id'
+        const beforeSuffix = headerStr.slice(0, -suffix.length);
+        
+        // Valid ID column names should not contain '_INT_' before the suffix
+        // Examples of valid names: 'user_INT_id', 'product_INT_id', 'order_INT_id'
+        // Examples of invalid names: 'A_INT_base_activity_id', 'base_INT_activity_id'
+        if (!beforeSuffix.includes('_INT_')) {
+          idColumns.push(col + 1);
+          console.log(`✅ [ID列检测] 发现有效ID列: "${headerStr}" (列${col + 1})`);
+        } else {
+          console.log(`⚠️ [ID列检测] 跳过假阳性: "${headerStr}" (列${col + 1}) - 包含中间_INT_`);
+        }
+      }
+    }
+  }
+  
+  console.log(`🎯 [ID列检测完成] 共发现 ${idColumns.length} 个有效ID列`);
+  return idColumns;
+}
+
+/**
+ * 🚀 PHASE 1 OPTIMIZATION: Helper function to validate if a column header is a valid ID column
+ * @param {string} headerValue - The column header value to check
+ * @returns {boolean} True if it's a valid ID column
+ */
+function isValidIdColumn(headerValue) {
+  if (!headerValue || typeof headerValue !== 'string') return false;
+  
+  const headerStr = headerValue.trim();
+  const suffix = ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX;
+  
+  if (!suffix || !headerStr.endsWith(suffix)) return false;
+  
+  // Additional check: ensure it's not a false positive like 'A_INT_base_activity_id'
+  const beforeSuffix = headerStr.slice(0, -suffix.length);
+  
+  // Valid ID column names should not contain '_INT_' before the suffix
+  // Examples of valid names: 'user_INT_id', 'product_INT_id', 'order_INT_id'
+  // Examples of invalid names: 'A_INT_base_activity_id', 'base_INT_activity_id'
+  return !beforeSuffix.includes('_INT_');
+}
+
+/**
  * Gets the column numbers that were edited in a given range.
  */
 function getEditedColumns(range) {
@@ -96,8 +638,8 @@ function checkIdConflicts(editedCell) {
 
   const headerValue = sheet.getRange(1, range.getColumn()).getValue();
   
-  // Only check if it\'s a valid ID column
-  if (!headerValue || !headerValue.toString().endsWith(ID_CHECKER_CONFIG.ID_COLUMN_SUFFIX)) {
+  // Only check if it's a valid ID column
+  if (!headerValue || !isValidIdColumn(headerValue.toString())) {
     return;
   }
 
@@ -140,17 +682,13 @@ function validateAndClearConflictMarks() {
   const stats = { totalCells: 0, conflictCells: 0, clearedConflicts: 0, validConflicts: 0 };
 
   try {
-    const lastRow = currentSheet.getLastRow();
-    const lastColumn = currentSheet.getLastColumn();
+    const batchData = readSheetData(currentSheet);
+    stats.totalCells = batchData.lastRow * batchData.lastColumn;
 
-    if (lastRow <= 1 || lastColumn === 0) {
+    if (stats.totalCells === 0) {
       SpreadsheetApp.getActiveSpreadsheet().toast('当前工作表没有数据可供检查。');
       return;
     }
-
-    // 1. Batch read all sheet data at once
-    const batchData = readSheetDataBatch(currentSheet, lastRow, lastColumn);
-    stats.totalCells = lastRow * lastColumn;
 
     // 2. Detect cells with conflict notes (in-memory)
     const conflictCells = detectConflictCells(batchData);
@@ -161,19 +699,27 @@ function validateAndClearConflictMarks() {
       // 3. Unified validation for all detected cells
       const validationResults = unifiedValidateCells(conflictCells, sheetName);
       
-      // 4. Batch update cells based on validation results
+      // 4. Use optimized batch updates
       const updateStats = updateCellsBatch(validationResults, currentSheet);
       stats.clearedConflicts = updateStats.clearedCount;
       stats.validConflicts = updateStats.validCount;
     }
 
     const duration = new Date().getTime() - startTime;
-    const results = { summary: { ...stats, duration, success: true }, sheets: [] }; // Simplified results
+    const results = { summary: { ...stats, duration, success: true }, sheets: [] };
+    
+    // 🚀 PHASE 1 OPTIMIZATION: Clear caches after operation
+    clearAllCaches();
+    
     showCleanupResults(results);
+    
+    console.log(`🎉 [验证完成] 总耗时: ${duration}ms`);
 
   } catch (error) {
     console.error(`💥 [清理异常] ${error.stack}`);
     SpreadsheetApp.getActiveSpreadsheet().toast(`冲突标记清理失败: ${error.message}`);
+    // Clear caches even on error
+    clearAllCaches();
   }
 }
 
@@ -181,8 +727,6 @@ function validateAndClearConflictMarks() {
 // ============================================================================ 
 // UNIFIED CONFLICT VALIDATION PIPELINE
 // ============================================================================ 
-
-// STAGE 1: DATA PREPARATION
 
 /**
  * Builds a cache of ID column data for a specific column name across all sheets.
@@ -218,6 +762,65 @@ function buildSheetIdDataCache(ss, columnName) {
       console.warn(`⚠️ [缓存警告] 无法缓存表格 ${sheetName} 的ID列数据: ${error.message}`);
     }
   }
+  return sheetIdDataCache;
+}
+
+/**
+ * ID column cache builder using new caching system
+ * @param {Spreadsheet} ss The spreadsheet object.
+ * @param {string} columnName The header of the ID column to cache.
+ * @returns {Map<string, Object>} Map where key is sheet name, value is {headers, idColumn, ...}.
+ */
+function buildSheetIdDataCacheOptimized(ss, columnName) {
+  const sheetIdDataCache = new Map();
+  const sheets = ss.getSheets();
+  
+  console.log(`🚀 [优化缓存] 开始构建ID列缓存: ${columnName}`);
+
+  for (const sheet of sheets) {
+    const sheetName = sheet.getName();
+    try {
+      // Use cached dimensions if available
+      let dimensions;
+      if (DIMENSION_CACHE.has(sheetName)) {
+        dimensions = DIMENSION_CACHE.get(sheetName);
+      } else {
+        dimensions = getSheetDimensionsCached(sheet);
+      }
+      
+      const { lastRow, lastCol } = dimensions;
+      if (lastRow <= 1 || lastCol === 0) continue;
+
+      // Use cached headers if available
+      let headers;
+      if (HEADER_CACHE.has(sheetName)) {
+        headers = HEADER_CACHE.get(sheetName);
+      } else {
+        headers = getSheetHeadersCached(sheet);
+      }
+      
+      // Use strict ID column detection to avoid false positives
+      const columnIndex = headers.findIndex(header => header && isValidIdColumn(header.toString()));
+
+      if (columnIndex !== -1) {
+        // Read only the ID column data instead of the entire sheet
+        const idColumn = sheet.getRange(2, columnIndex + 1, lastRow - 1, 1).getValues().flat();
+        sheetIdDataCache.set(sheetName, {
+          headers,
+          idColumn,
+          columnIndex: columnIndex + 1,
+          lastRow,
+          lastCol
+        });
+        
+        console.log(`✅ [缓存成功] ${sheetName}: ID列位置${columnIndex + 1}, 数据行数${idColumn.length}`);
+      }
+    } catch (error) {
+      console.warn(`⚠️ [优化缓存警告] 无法缓存表格 ${sheetName} 的ID列数据: ${error.message}`);
+    }
+  }
+  
+  console.log(`🎯 [缓存完成] 成功缓存 ${sheetIdDataCache.size} 个表格的ID列数据`);
   return sheetIdDataCache;
 }
 
@@ -508,16 +1111,22 @@ function detectConflictCells(batchData) {
 }
 
 /**
- * Orchestrates the batch update of cells after validation.
+ * batch update using new batch update functions
  * @returns {Object} Statistics of the update operation.
  */
 function updateCellsBatch(validationResults, currentSheet) {
   const { cellsToClear, cellsToUpdate } = categorizeCells(validationResults);
+  
+  console.log(`🚀 [批量更新] 开始处理: 清除${cellsToClear.length}个, 更新${cellsToUpdate.length}个`);
 
+  // 使用优化的批量操作
   const clearedCount = clearConflictMarksBatch(cellsToClear, currentSheet);
-  const validCount = updateConflictNotesBatch(cellsToUpdate, currentSheet);
+  const validCount = updateConflictNotesBatchOptimized(cellsToUpdate, currentSheet);
 
-  return { clearedCount, validCount };
+  return { 
+    clearedCount, 
+    validCount: cellsToUpdate.length  // 直接使用输入的数量，而不是 batchUpdateCells 的统计
+  };
 }
 
 /**
@@ -537,30 +1146,31 @@ function categorizeCells(validationResults) {
 }
 
 /**
- * Clears conflict markings (background and note) from a list of cells using batch operations.
+ * batch clear using new batch update system
  * @returns {number} The number of cells successfully cleared.
  */
 function clearConflictMarksBatch(cellsToClear, currentSheet) {
   if (cellsToClear.length === 0) return 0;
+  
   console.log(`🧹 [批量清除] 开始清除 ${cellsToClear.length} 个过期冲突标记`);
-  try {
-    const a1Notations = cellsToClear.map(cell => currentSheet.getRange(cell.row, cell.col).getA1Notation());
-    const rangeList = currentSheet.getRangeList(a1Notations);
-    rangeList.setBackground(null);
-    rangeList.clearNote();
-    return cellsToClear.length;
-  } catch (e) {
-    console.error(`❌ [批量清除失败]: ${e.message}. 回退到逐个清除。`);
-    let count = 0;
-    for(const cell of cellsToClear) {
-        try {
-            const range = currentSheet.getRange(cell.row, cell.col);
-            range.setBackground(null);
-            range.clearNote();
-            count++;
-        } catch (err) { /* ignore single error */ }
-    }
-    return count;
+  
+  // Prepare updates for the optimized batch system
+  const updates = cellsToClear.map(cell => ({
+    row: cell.row,
+    col: cell.col,
+    background: null,
+    note: '' // Clear note
+  }));
+  
+  // Use optimized batch update
+  const result = batchUpdateCells(currentSheet, updates);
+  
+  if (result.success) {
+    console.log(`✅ [批量清除完成] 成功清除 ${result.updatedCount} 个单元格`);
+    return result.updatedCount;
+  } else {
+    console.error(`❌ [批量清除失败] 回退到传统方法`);
+    return clearConflictMarksBatch(cellsToClear, currentSheet);
   }
 }
 
@@ -588,6 +1198,42 @@ function updateConflictNotesBatch(cellsToUpdate, currentSheet) {
     }
   }
   return updatedCount;
+}
+
+/**
+ * 🚀 PHASE 1 OPTIMIZATION: Optimized batch note update using new batch update system
+ * @returns {number} The number of cells successfully updated.
+ */
+function updateConflictNotesBatchOptimized(cellsToUpdate, currentSheet) {
+  if (cellsToUpdate.length === 0) return 0;
+  
+  console.log(`📝 [批量更新] 开始更新 ${cellsToUpdate.length} 个有效冲突的注释和背景`);
+  
+  // Prepare updates for the optimized batch system
+  const updates = cellsToUpdate.map(cell => {
+    const conflictLocations = cell.conflicts.map(loc => `${loc.sheet} 第${loc.row}行`).join('\n');
+    const userNote = `在以下位置重复:\n${conflictLocations}`;
+    const currentNote = currentSheet.getRange(cell.row, cell.col).getNote();
+    const updatedNote = NoteManager.addSystemNote(currentNote, NOTE_CONSTANTS.TYPES.CONFLICT, userNote);
+    
+    return {
+      row: cell.row,
+      col: cell.col,
+      background: ID_CHECKER_CONFIG.COLORS.CONFLICT,
+      note: updatedNote
+    };
+  });
+  
+  // Use optimized batch update
+  const result = batchUpdateCells(currentSheet, updates);
+  
+  if (result.success) {
+    console.log(`✅ [优化批量更新完成] 成功更新 ${result.updatedCount} 个单元格`);
+    return result.updatedCount;
+  } else {
+    console.error(`❌ [优化批量更新失败] 回退到传统方法`);
+    return updateConflictNotesBatch(cellsToUpdate, currentSheet);
+  }
 }
 
 // ============================================================================ 
