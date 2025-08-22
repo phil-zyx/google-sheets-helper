@@ -16,7 +16,8 @@
             "name": "Google Sheets Helper",
             "logoUrl": "https://writesome.oss-cn-chengdu.aliyuncs.com/logo.jpeg",
             "openLinkUrlPrefixes": [
-                "https://www.github.com/"
+                "https://www.github.com/",
+                "https://script.google.com/"
             ],
             "universalActions": [{
                 "label": "Google Sheets Helper",

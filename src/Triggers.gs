@@ -427,58 +427,61 @@ function cardClearAllMarks(e) {
 function checkConfigTable() {
   try {
     const sheetName = SpreadsheetApp.getActiveSheet().getName();
-    const userEmail = Session.getActiveUser().getEmail();
+    const spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
     
-    // 构建请求URL，包含必要的查询参数
-    const url = `https://script.google.com/a/macros/nibirutech.com/s/AKfycbzEsIxDkszo5CLZ4X1tewaDIC-udhCktaYSyBX6OmeiLKMmzn5rgnM0IwyKb9W9syI/exec?api=v1&action=runWorkflow&workflowId=WF1752049455621&apiKey=test-api-key-123&sheetName=${encodeURIComponent(sheetName)}`;
+    // 使用你的实际 Web App URL
+    const configSheetSqlUrl = 'https://script.google.com/a/macros/nibirutech.com/s/AKfycbzEsIxDkszo5CLZ4X1tewaDIC-udhCktaYSyBX6OmeiLKMmzn5rgnM0IwyKb9W9syI/exec';
     
-    // 准备POST请求数据
+    // 构建请求URL，使用 POST 方法传递参数
+    const url = `${configSheetSqlUrl}?api=v1&action=runWorkflow`;
+    
+    // 准备POST请求数据，只传递必要的参数
     const payload = {
+      workflowId: 'DEFAULT_CONFIG_CHECK', // 使用默认工作流ID，或者你指定的工作流ID
       sheetName: sheetName,
-      userEmail: userEmail
+      spreadsheetId: spreadsheetId
     };
     
-    // 获取OAuth token
-    let token;
-    try {
-      token = ScriptApp.getOAuthToken();
-      console.log('OAuth token obtained successfully');
-    } catch (tokenError) {
-      console.error('Failed to get OAuth token:', tokenError);
-      SpreadsheetApp.getActive().toast(
-        `获取认证令牌失败: ${tokenError.toString()}`,
-        '认证错误',
-        5
-      );
-      return;
-    }
+    console.log('发送配置检查请求:', {
+      url: url,
+      payload: payload,
+      sheetName: sheetName
+    });
     
     // 发送POST请求
     const response = UrlFetchApp.fetch(url, {
       method: 'POST',
       contentType: 'application/json',
       payload: JSON.stringify(payload),
-      muteHttpExceptions: true,
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
+      muteHttpExceptions: true
     });
     
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     
     console.log('配置检查响应:', responseCode, responseText);
-    console.log('请求URL:', url);
-    console.log('请求头:', response.getHeaders());
     
     if (responseCode === 200) {
-      SpreadsheetApp.getActive().toast(
-        `配置检查请求已发送\n页签: ${sheetName}\n用户: ${userEmail}`,
-        '检查请求成功',
-        5
-      );
+      try {
+        const result = JSON.parse(responseText);
+        if (result.success) {
+          SpreadsheetApp.getActive().toast(
+            `配置检查已启动\n页签: ${sheetName}\n任务ID: ${result.taskId || 'N/A'}`,
+            '检查启动成功',
+            5
+          );
+          
+          console.log('工作流启动成功:', result);
+        } else {
+          throw new Error(result.error || '未知错误');
+        }
+      } catch (parseError) {
+        SpreadsheetApp.getActive().toast(
+          `配置检查请求已发送\n页签: ${sheetName}\n响应: ${responseText}`,
+          '检查请求成功',
+          5
+        );
+      }
     } else {
       SpreadsheetApp.getActive().toast(
         `配置检查请求失败\n状态码: ${responseCode}\n响应: ${responseText}`,
