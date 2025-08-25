@@ -87,10 +87,10 @@ function onOpen(e) {
       .addItem('合并表格', 'smartNativeMerge')  // 使用智能合并函数
       // .addItem('比较差异', 'showCompareDialog')
       // .addItem('合并表格', 'showMergeDialog')
-      .addItem('配置表检查(开发中)', 'checkConfigTable')  // 新增配置检查功能
       .addItem('清除所有标记', 'clearAllMarks')
       .addItem('手动更新冲突标记', 'validateAndClearConflictMarks')  // 🆕 新增手动清理功能
       .addItem('刷新触发器', 'createEditTrigger')
+      .addItem('配置检查', 'checkConfigTable')  // 新增配置检查功能
       .addToUi();
   } catch (error) {
     console.error('Error creating menu: ' + error.toString());
@@ -426,70 +426,36 @@ function cardClearAllMarks(e) {
  */
 function checkConfigTable() {
   try {
+    const documentName = SpreadsheetApp.getActiveSpreadsheet().getName();
     const sheetName = SpreadsheetApp.getActiveSheet().getName();
     const spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-    
-    // 使用你的实际 Web App URL
-    const configSheetSqlUrl = 'https://script.google.com/a/macros/nibirutech.com/s/AKfycbzEsIxDkszo5CLZ4X1tewaDIC-udhCktaYSyBX6OmeiLKMmzn5rgnM0IwyKb9W9syI/exec';
-    
-    // 构建请求URL，使用 POST 方法传递参数
-    const url = `${configSheetSqlUrl}?api=v1&action=runWorkflow`;
-    
-    // 准备POST请求数据，只传递必要的参数
-    const payload = {
-      workflowId: 'DEFAULT_CONFIG_CHECK', // 使用默认工作流ID，或者你指定的工作流ID
+    const dingTalkUrl = "https://oapi.dingtalk.com/robot/send?access_token=bae9056dcea782447b1a4e69473d0aea6fcfd7026193d1e406173f8bdcc0e73f";
+    const params = {
+       documentName: documentName,
+       sheetName: sheetName,
+       spreadsheetId: spreadsheetId,
+       workflowId: "DEFAULT_CONFIG_CHECK",
+       notification: {
+         dingTalkWebhookUrl: dingTalkUrl
+       }
+    };
+    console.log('开始配置检查:', {
       sheetName: sheetName,
       spreadsheetId: spreadsheetId
-    };
-    
-    console.log('发送配置检查请求:', {
-      url: url,
-      payload: payload,
-      sheetName: sheetName
     });
     
-    // 发送POST请求
-    const response = UrlFetchApp.fetch(url, {
-      method: 'POST',
-      contentType: 'application/json',
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
+    const result = ConfigSheetSQL.runConfigCheck(params);
     
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    console.log('配置检查响应:', responseCode, responseText);
-    
-    if (responseCode === 200) {
-      try {
-        const result = JSON.parse(responseText);
-        if (result.success) {
-          SpreadsheetApp.getActive().toast(
-            `配置检查已启动\n页签: ${sheetName}\n任务ID: ${result.taskId || 'N/A'}`,
-            '检查启动成功',
-            5
-          );
-          
-          console.log('工作流启动成功:', result);
-        } else {
-          throw new Error(result.error || '未知错误');
-        }
-      } catch (parseError) {
-        SpreadsheetApp.getActive().toast(
-          `配置检查请求已发送\n页签: ${sheetName}\n响应: ${responseText}`,
-          '检查请求成功',
-          5
-        );
-      }
-    } else {
+    if (result.success) {
       SpreadsheetApp.getActive().toast(
-        `配置检查请求失败\n状态码: ${responseCode}\n响应: ${responseText}`,
-        '检查请求失败',
-        8
+        `配置检查已启动\n页签: ${sheetName}\n任务ID: ${result.taskId || 'N/A'}`,
+        '检查启动成功，完成后钉钉会通知',
+        5
       );
-    }
-    
+      console.log('工作流启动成功:', result);
+    } else {
+      throw new Error(result.error || '未知错误');
+    } 
   } catch (error) {
     console.error('配置检查失败:', error);
     SpreadsheetApp.getActive().toast(
@@ -556,3 +522,38 @@ function testMenuCreation() {
 function showAlert() {
   SpreadsheetApp.getUi().alert('测试成功!');
 }
+
+/**
+    2  * =================================================================
+    3  * === GSQL 库 代理函数 (Proxy Functions for GSQL Library) ===
+    4  * =================================================================
+    5  * 这些函数是必需的，以便库创建的触发器可以正确调用库中的代码。
+    6  * 请将此代码块复制到您的主脚本中。
+    7  * -----------------------------------------------------------------
+    8  * These functions are required so that triggers created by the
+    9  * library can correctly call the code within the library.
+   10  * Please copy this block into your main script.
+   11  * =================================================================
+   12  */
+function processWorkflowQueueV3_0() {
+      // 'ConfigSheetSql' 是库的默认标识符，如果已重命名，请修改。
+      // 'ConfigSheetSql' is the default identifier for the library. 
+      // If you have renamed it, please modify it accordingly.
+      ConfigSheetSQL.processWorkflowQueueV3_0();
+    }
+ 
+    function processWorkflowQueueV3_1() {
+      ConfigSheetSQL.processWorkflowQueueV3_1();
+    }
+    
+    function processWorkflowQueueV3_2() {
+      ConfigSheetSQL.processWorkflowQueueV3_2();
+    }
+    
+    function processWorkflowQueueV3_3() {
+      ConfigSheetSQL.processWorkflowQueueV3_3();
+    }
+    
+   function processWorkflowQueueV3_4() {
+      ConfigSheetSQL.processWorkflowQueueV3_4();
+  }

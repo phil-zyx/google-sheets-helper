@@ -1,6 +1,13 @@
 {
     "timeZone": "Asia/Shanghai",
-    "dependencies": {},
+    "dependencies": {
+        "libraries": [{
+            "userSymbol": "ConfigSheetSQL",
+            "libraryId": "1Y_leFCMF0VBd-8gY52NRiAkjnKmAdhDTbyIZ1a_hbifTgj6xWSR3N_3h",
+            "version": "0",
+            "developmentMode": true
+        }]
+    },
     "exceptionLogging": "STACKDRIVER",
     "runtimeVersion": "V8",
     "oauthScopes": [
@@ -9,15 +16,15 @@
         "https://www.googleapis.com/auth/script.container.ui",
         "https://www.googleapis.com/auth/script.triggers",
         "https://www.googleapis.com/auth/script.external_request",
-        "https://www.googleapis.com/auth/userinfo.email"
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/drive"
     ],
     "addOns": {
         "common": {
             "name": "Google Sheets Helper",
             "logoUrl": "https://writesome.oss-cn-chengdu.aliyuncs.com/logo.jpeg",
             "openLinkUrlPrefixes": [
-                "https://www.github.com/",
-                "https://script.google.com/"
+                "https://www.github.com/"
             ],
             "universalActions": [{
                 "label": "Google Sheets Helper",
@@ -36,6 +43,7 @@
     "urlFetchWhitelist": [
         "https://writesome.oss-cn-chengdu.aliyuncs.com/",
         "https://www.github.com/",
-        "https://script.google.com/"
+        "https://script.google.com/",
+        "https://oapi.dingtalk.com/"
     ]
 }
