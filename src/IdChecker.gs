@@ -740,6 +740,13 @@ function buildSheetIdDataCache(ss, columnName) {
 
   for (const sheet of sheets) {
     const sheetName = sheet.getName();
+    
+    // 🚀 PHASE 1 OPTIMIZATION: 跳过预览表和临时表
+    if (isPreviewOrTemporarySheet(sheetName)) {
+      console.log(`⏭️ [跳过预览表] ${sheetName}`);
+      continue;
+    }
+    
     try {
       const lastCol = sheet.getLastColumn();
       const lastRow = sheet.getLastRow();
@@ -779,6 +786,13 @@ function buildSheetIdDataCacheOptimized(ss, columnName) {
 
   for (const sheet of sheets) {
     const sheetName = sheet.getName();
+    
+    // 🚀 PHASE 1 OPTIMIZATION: 跳过预览表和临时表
+    if (isPreviewOrTemporarySheet(sheetName)) {
+      console.log(`⏭️ [跳过预览表] ${sheetName}`);
+      continue;
+    }
+    
     try {
       // Use cached dimensions if available
       let dimensions;
@@ -1261,4 +1275,28 @@ function showCleanupResults(results) {
   
   SpreadsheetApp.getActiveSpreadsheet().toast(message, '清理完成', 8);
   console.log(`📋 [清理报告] ${message}`);
+}
+
+/**
+ * 检查表格是否为预览表或临时表
+ * @param {string} sheetName 表格名称
+ * @returns {boolean} 如果是预览表或临时表则返回true
+ */
+function isPreviewOrTemporarySheet(sheetName) {
+  // 合并预览表模式：源表 -> 目标表 合并预览
+  if (sheetName.includes(' -> ') && sheetName.includes(' 合并预览')) {
+    return true;
+  }
+  
+  // 对比预览表模式：表1 vs 表2 比较结果
+  if (sheetName.includes(' vs ') && sheetName.includes(' 比较结果')) {
+    return true;
+  }
+  
+  // 其他可能的预览表模式
+  if (sheetName.includes('预览') || sheetName.includes('preview') || sheetName.includes('temp')) {
+    return true;
+  }
+  
+  return false;
 }
