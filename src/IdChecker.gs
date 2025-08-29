@@ -232,100 +232,55 @@ function groupUpdatesByType(updates) {
 }
 
 /**
- * background updates using contiguous ranges
+ * background updates using getRangeList for scattered data
  * @param {Sheet} sheet - The sheet to update
  * @param {Array} backgroundUpdates - Array of background update objects
  * @returns {Object} Update result
  */
 function batchUpdateBackgrounds(sheet, backgroundUpdates) {
   try {
-    console.log(`🎨 [背景更新] 开始处理 ${backgroundUpdates.length} 个背景更新`);
+    console.log(`🎨 [背景更新] 开始处理 ${backgroundUpdates.length} 个背景更新 (RangeList)`);
     
-    // Sort updates by row and column for better batching
-    const sortedUpdates = [...backgroundUpdates].sort((a, b) => {
-      if (a.row !== b.row) return a.row - b.row;
-      return a.col - b.col;
-    });
+    // Group updates by color
+    const updatesByColor = new Map();
+    for (const update of backgroundUpdates) {
+      const color = update.background || 'null';
+      if (!updatesByColor.has(color)) {
+        updatesByColor.set(color, []);
+      }
+      updatesByColor.get(color).push(update);
+    }
     
-    let successCount = 0;
     let errorCount = 0;
-    const successCells = []; // 新增：记录成功更新的单元格
-    
-    // Group updates into contiguous ranges for batch processing
-    let currentRange = null;
-    const ranges = [];
-    
-    for (const update of sortedUpdates) {
-      if (!currentRange) {
-        currentRange = {
-          startRow: update.row,
-          endRow: update.row,
-          startCol: update.col,
-          endCol: update.col,
-          background: update.background,
-          updates: [update]
-        };
-      } else if (
-        update.row === currentRange.endRow &&
-        update.col === currentRange.endCol + 1 &&
-        update.background === currentRange.background
-      ) {
-        // Extend current range horizontally
-        currentRange.endCol = update.col;
-        currentRange.updates.push(update);
-      } else if (
-        update.row === currentRange.endRow + 1 &&
-        update.col === currentRange.startCol &&
-        update.background === currentRange.background
-      ) {
-        // Extend current range vertically
-        currentRange.endRow = update.row;
-        currentRange.updates.push(update);
-      } else {
-        // Start new range
-        ranges.push(currentRange);
-        currentRange = {
-          startRow: update.row,
-          endRow: update.row,
-          startCol: update.col,
-          endCol: update.col,
-          background: update.background,
-          updates: [update]
-        };
+    const successCells = [];
+
+    for (const [color, updates] of updatesByColor.entries()) {
+      // getA1Notation is not an API call and is efficient.
+      const a1Notations = updates.map(u => sheet.getRange(u.row, u.col).getA1Notation());
+      
+      // getRangeList has a limit of 500 ranges per call.
+      const chunkSize = 500;
+      for (let i = 0; i < a1Notations.length; i += chunkSize) {
+        const chunkA1 = a1Notations.slice(i, i + chunkSize);
+        const chunkUpdates = updates.slice(i, i + chunkSize);
+        try {
+          const rangeList = sheet.getRangeList(chunkA1);
+          if (color === 'null') {
+            rangeList.setBackground(null);
+          } else {
+            rangeList.setBackground(color);
+          }
+          chunkUpdates.forEach(u => successCells.push({ row: u.row, col: u.col }));
+        } catch (err) {
+          console.error(`❌ [RangeList背景更新失败] 颜色 ${color}, ${chunkA1.length}个单元格: ${err.message}`);
+          errorCount += chunkA1.length;
+        }
       }
     }
     
-    // Add the last range
-    if (currentRange) {
-      ranges.push(currentRange);
-    }
-    
-    console.log(`📊 [范围分组] 将 ${backgroundUpdates.length} 个更新分组为 ${ranges.length} 个连续范围`);
-    
-    // Process each range in batch
-    for (const range of ranges) {
-      try {
-        const numRows = range.endRow - range.startRow + 1;
-        const numCols = range.endCol - range.startCol + 1;
-        
-        // Use single API call for each contiguous range
-        const sheetRange = sheet.getRange(range.startRow, range.startCol, numRows, numCols);
-        sheetRange.setBackground(range.background);
-        
-        // 记录成功更新的单元格
-        range.updates.forEach(update => {
-          successCells.push({ row: update.row, col: update.col });
-        });
-        
-        successCount += range.updates.length;
-      } catch (err) {
-        console.error(`❌ [范围更新失败] 行${range.startRow}-${range.endRow}, 列${range.startCol}-${range.endCol}: ${err.message}`);
-        errorCount += range.updates.length;
-      }
-    }
-    
+    const successCount = successCells.length;
     console.log(`🎨 [背景更新完成] 成功: ${successCount}个, 失败: ${errorCount}个`);
-    return { successCells, errorCount }; // 修改返回值结构
+    return { successCells, errorCount };
     
   } catch (error) {
     console.error(`❌ [背景更新失败]: ${error.message}`);
@@ -1227,7 +1182,7 @@ function updateConflictNotesBatchOptimized(cellsToUpdate, currentSheet) {
   const updates = cellsToUpdate.map(cell => {
     const conflictLocations = cell.conflicts.map(loc => `${loc.sheet} 第${loc.row}行`).join('\n');
     const userNote = `在以下位置重复:\n${conflictLocations}`;
-    const currentNote = currentSheet.getRange(cell.row, cell.col).getNote();
+    const currentNote = cell.note;
     const updatedNote = NoteManager.addSystemNote(currentNote, NOTE_CONSTANTS.TYPES.CONFLICT, userNote);
     
     return {
