@@ -223,39 +223,53 @@ function recordBaseValueAsync(range, oldValue) {
 }
 
 /**
- * 延迟执行的基准值注释更新
+ * 延迟执行的基准值注释更新（已修复竞态条件）
+ * @param {Object} e The event object passed by the trigger, contains triggerUid.
  */
-function updateBaseValueNote() {
-  const triggers = ScriptApp.getProjectTriggers();
-  const currentTrigger = triggers.find(t => t.getHandlerFunction() === 'updateBaseValueNote');
-  
-  if (!currentTrigger) return;
-  
+function updateBaseValueNote(e) {
+  const triggerId = e.triggerUid;
+  if (!triggerId) {
+    console.error('updateBaseValueNote was called without a trigger event object or triggerUid.');
+    return;
+  }
+
+  let triggerToDelete = null;
+
   try {
-    const paramsJson = PropertiesService.getScriptProperties()
-      .getProperty(`base_value_${currentTrigger.getUniqueId()}`);
+    // Find the specific trigger object to delete it later.
+    // This is more robust than finding by handler function name.
+    triggerToDelete = ScriptApp.getProjectTriggers().find(t => t.getUniqueId() === triggerId);
+
+    const propertyKey = `base_value_${triggerId}`;
+    const paramsJson = PropertiesService.getScriptProperties().getProperty(propertyKey);
     
     if (paramsJson) {
-      const params = JSON.parse(paramsJson);
-      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(params.sheetName);
-      const range = sheet.getRange(params.row, params.column);
-      
-      const note = range.getNote();
-      const newNote = NoteManager.addSystemNote(
-        note,
-        NOTE_CONSTANTS.TYPES.BASE_VALUE,
-        params.baseValue
-      );
-      range.setNote(newNote);
-      
-      // 清理
-      PropertiesService.getScriptProperties().deleteProperty(`base_value_${currentTrigger.getUniqueId()}`);
+      try {
+        const params = JSON.parse(paramsJson);
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(params.sheetName);
+        if (sheet) {
+          const range = sheet.getRange(params.row, params.column);
+          const note = range.getNote();
+          const newNote = NoteManager.addSystemNote(
+            note,
+            NOTE_CONSTANTS.TYPES.BASE_VALUE,
+            params.baseValue
+          );
+          range.setNote(newNote);
+        }
+      } finally {
+        // Ensure property is deleted even if sheet/range operations fail
+        PropertiesService.getScriptProperties().deleteProperty(propertyKey);
+      }
     }
   } catch (error) {
-    console.error('更新基准值注释失败:', error);
+    console.error(`更新基准值注释失败 (Trigger ID: ${triggerId}):`, error);
   } finally {
-    // 删除触发器
-    ScriptApp.deleteTrigger(currentTrigger);
+    // Always try to delete the trigger that was supposed to run.
+    // If triggerToDelete is null, it might have been deleted by another concurrent execution, which is fine.
+    if (triggerToDelete) {
+      ScriptApp.deleteTrigger(triggerToDelete);
+    }
   }
 }
 
